@@ -1,95 +1,47 @@
-// Empties the main system prompt and strips Copilot's system text from subagent requests.
+// Empties the main system prompt, defines the gp subagent with Copilot's prompt parts off, and sets the
+// tool allowlist, no custom instructions and the 8 KB output limit. No request handler.
 // Uses internal Copilot SDK calls; tested on Copilot CLI 1.0.105 only.
-import {
-  CopilotClient,
-  CopilotRequestHandler,
-  CopilotWebSocketCloseStatus,
-  CopilotWebSocketHandler,
-  type CopilotClientOptions,
-  type CopilotRequestContext,
-} from '@github/copilot-sdk';
+import { CopilotClient, type CopilotClientOptions } from '@github/copilot-sdk';
+import { rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 
-type Message = { role?: string };
-type Body = { type?: string; system?: unknown; instructions?: unknown; input?: Message[]; messages?: Message[] };
+const off = {
+  includeAISafety: false, includeToolInstructions: false, includeParallelToolCalling: false,
+  includeEnvironmentContext: false, includeNoTmpFileInstructions: false, includeSoftFileOutputInstructions: false,
+  includeCustomAgentInstructions: false, includeCustomInstructions: false, includeDynamicContextBoard: false,
+  includeSessionSearchContext: false, includeConsolidationPrompt: false,
+};
+const config = {
+  systemMessage: { mode: 'replace', content: '' },
+  customAgents: [{ name: 'gp', description: 'General-purpose agent.', prompt: '', promptParts: off }],
+  availableTools: ['task', 'bash', 'view', 'apply_patch', 'create', 'edit', 'web_fetch', 'skill'],
+  skipCustomInstructions: true,
+  largeOutput: { maxSizeBytes: 8192 },
+  suppressResumeEvent: true,
+};
 
-const isSubagent = (ctx?: CopilotRequestContext) =>
-  !!ctx?.parentAgentId || ctx?.interactionType === 'conversation-subagent';
-const notSystem = (m: Message) => m.role !== 'system' && m.role !== 'developer';
-
-function strip(body: Body): Body {
-  delete body.system;
-  delete body.instructions;
-  body.input = body.input?.filter(notSystem);
-  body.messages = body.messages?.filter(notSystem);
-  return body;
-}
-
-// The SDK's default WebSocket forwarder drops the auth headers, so forward them ourselves.
-class Forwarder extends CopilotWebSocketHandler {
-  private up?: WebSocket;
-
-  constructor(ctx: CopilotRequestContext) {
-    super(ctx);
-  }
-
-  async start() {
-    // Node's WebSocket (undici) also takes { headers }; the standard types only know protocols.
-    const init = { headers: this.context.headers } as unknown as string[];
-    const up = new WebSocket(this.context.url, init);
-    up.binaryType = 'arraybuffer';
-    this.up = up;
-    up.addEventListener('message', e => {
-      const data = typeof e.data === 'string' ? e.data : new Uint8Array(e.data as ArrayBuffer);
-      this.sendResponseMessage(data).catch(err => this.close(new CopilotWebSocketCloseStatus(String(err), undefined, err)));
-    });
-    up.addEventListener('close', () => this.close(CopilotWebSocketCloseStatus.normalClosure));
-    up.addEventListener('error', () => this.close(new CopilotWebSocketCloseStatus('WebSocket error', undefined, new Error('WebSocket error'))));
-    await new Promise<void>((resolve, reject) => {
-      up.addEventListener('open', () => resolve(), { once: true });
-      up.addEventListener('error', () => reject(new Error('WebSocket error')), { once: true });
-    });
-  }
-
-  sendRequestMessage(data: string | Uint8Array, ctx?: CopilotRequestContext) {
-    let text = typeof data === 'string' ? data : new TextDecoder().decode(data);
-    if (isSubagent(ctx ?? this.context)) {
-      const body: Body = JSON.parse(text);
-      if (body.type === 'response.create') text = JSON.stringify(strip(body));
-    }
-    if (this.up?.readyState === WebSocket.OPEN) this.up.send(text);
-  }
-
-  async close(status = CopilotWebSocketCloseStatus.normalClosure) {
-    if (this.up && this.up.readyState <= WebSocket.OPEN) this.up.close();
-    await super.close(status);
-  }
-}
-
-class Handler extends CopilotRequestHandler {
-  protected async sendRequest(request: Request, ctx: CopilotRequestContext) {
-    if (isSubagent(ctx)) {
-      const body = strip(await request.clone().json());
-      request = new Request(request, { body: JSON.stringify(body) });
-    }
-    return super.sendRequest(request, ctx);
-  }
-
-  protected async openWebSocket(ctx: CopilotRequestContext) {
-    const forwarder = new Forwarder(ctx);
-    await forwarder.start();
-    return forwarder;
-  }
-}
-
-// What the SDK's joinSession() does, plus a request handler, which joinSession() doesn't accept.
-// Both members are internal and missing from the SDK's types.
+// What the SDK's joinSession() does, kept so the extension can join again. Internal, missing from the SDK's types.
+type Send = (method: string, params?: any, ...rest: unknown[]) => Promise<unknown>;
 type Internal = {
+  connection: { sendRequest: Send };
   resumeSessionForExtension(sessionId: string | undefined, config: object, contributions: object): Promise<unknown>;
 };
-const options = { _internalConnection: { kind: 'parent-process' }, requestHandler: new Handler() } as CopilotClientOptions;
-const client = new CopilotClient(options) as unknown as Internal;
-await client.resumeSessionForExtension(
-  process.env.SESSION_ID,
-  { systemMessage: { mode: 'replace', content: '' }, suppressResumeEvent: true },
-  {},
-);
+const id = process.env.SESSION_ID;
+// Ready marker for the userPromptSubmitted hook in settings.json: this session, this copilot process.
+// It holds the time the last join finished plus 500 ms; the hook refuses interactive prompts submitted before then.
+const marker = `${process.env.COPILOT_HOME || homedir() + '/.copilot'}/session-state/${id}/minprompt.${process.ppid}`;
+const client = new CopilotClient({ _internalConnection: { kind: 'parent-process' } } as CopilotClientOptions);
+const internal = client as unknown as Internal;
+await client.start();
+// Don't ask to handle permission requests, as joinSession() doesn't; else -p without --yolo denies the extension.
+// The SDK sets that value itself and ignores it in the join config, so set it on the request.
+const send = internal.connection.sendRequest.bind(internal.connection);
+internal.connection.sendRequest = (m, p, ...r) => send(m, m === 'session.resume' ? { ...p, requestPermission: false } : p, ...r);
+const join = async () => {
+  await internal.resumeSessionForExtension(id, config, {});
+  writeFileSync(marker, String(Date.now() + 500));
+};
+await join();
+// /new leaves this session open; /resume back to it resets the system prompt until the join below finishes.
+client.onLifecycle('session.background', e => { if (e.sessionId === id) rmSync(marker, { force: true }); });
+client.onLifecycle('session.foreground', e => { if (e.sessionId === id) join().catch(err => console.error(err)); });
