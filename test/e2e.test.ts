@@ -1,5 +1,6 @@
 // Runs Copilot CLI with the README's run command and copilot-min/ against a fake model,
-// then checks what Copilot sent: no system text, the expected tools, only the gp subagent.
+// then checks what Copilot sent: no system text, the expected tools, only the gp subagent,
+// and that both subagents read the file and their results reached the main agent.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,7 +19,8 @@ function readmeCommand() {
   const block = readme.split('## Run')[1].split('```sh\n')[1].split('```')[0];
   const words = block.replaceAll('\\\n', ' ').split(/\s+/).filter(Boolean);
   const at = words.indexOf('copilot');
-  const env = Object.fromEntries(words.slice(0, at).map(w => [w.slice(0, w.indexOf('=')), w.slice(w.indexOf('=') + 1)])
+  const env = Object.fromEntries(words.slice(0, at).filter(w => /^[A-Z_]+=/.test(w))
+    .map(w => [w.slice(0, w.indexOf('=')), w.slice(w.indexOf('=') + 1)])
     .filter(([k]) => k !== 'COPILOT_HOME' && k !== 'GH_TOKEN'));
   return { env, args: words.slice(at + 1) };
 }
@@ -65,7 +67,6 @@ for (const family of families) {
           PATH: process.env.PATH,
           HOME: home,
           COPILOT_HOME: copilotHome,
-          COPILOT_AUTO_UPDATE: 'false',
           COPILOT_PROVIDER_BASE_URL: llm.url,
           COPILOT_PROVIDER_API_KEY: 'fake',
           COPILOT_MODEL: family.model,
@@ -76,14 +77,15 @@ for (const family of families) {
 
       assert.match(stdout, /parent-done/);
       const calls = llm.requests.filter(r => r.body.tools);
-      assert.ok(calls.filter(r => !r.subagent).length >= 3, 'main agent made its three calls');
-      assert.ok(calls.filter(r => r.subagent).length >= 4, 'both subagents made their two calls');
+      const main = calls.filter(r => !r.subagent);
+      const subagent = calls.filter(r => r.subagent);
+      assert.equal(subagent.filter(r => JSON.stringify(r.body).includes('hello from the file')).length, 2, 'both subagents read the file');
+      assert.equal(JSON.stringify(main.at(-1)?.body).split('subagent-done').length - 1, 2, 'both subagent results reached the main agent');
       for (const call of calls) {
         assert.deepEqual(systemText(call), [], `no system text in ${call.subagent ? 'subagent' : 'main'} request`);
         assert.deepEqual(toolNames(call), family.tools);
-        const task = JSON.stringify(call.body.tools.find((t: any) => (t.name ?? t.function?.name) === 'task'));
-        assert.match(task, /\bgp\b/);
-        assert.doesNotMatch(task, /general-purpose|explore|code-review|rubber-duck/);
+        const task = call.body.tools.find((t: any) => t.name === 'task');
+        assert.deepEqual((task.parameters ?? task.input_schema).properties.agent_type.enum, ['gp']);
       }
     } finally {
       llm.close();
