@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Starts the minimal Copilot in the current directory, after ./install.sh. These flags have no setting:
+# no client telemetry, stay on the installed Copilot version, and allow all tools, also in -p.
+set -euo pipefail
+exec copilot --disable-client-telemetry --no-auto-update --yolo "$@"
