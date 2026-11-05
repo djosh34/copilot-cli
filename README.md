@@ -78,6 +78,8 @@ description: General-purpose agent.
 ---
 ```
 
+A repo with its own agent files (`.github/agents/*.agent.md`, `.claude/agents/*.agent.md`) adds those agents next to `gp`. To keep only `gp`, add their names to `disabledSubagents` in `~/.copilot-min/settings.json`.
+
 Add a skill, for example one called `commit`:
 
 ```sh
