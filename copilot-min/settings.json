@@ -1,0 +1,8 @@
+{
+  "experimental": true,
+  "memory": false,
+  "ide": { "autoConnect": false },
+  "subagents": {
+    "disabledSubagents": ["explore", "task", "general-purpose", "code-review", "research", "security-review", "rubber-duck"]
+  }
+}
