@@ -119,11 +119,15 @@ test('install.sh merges into an existing settings.json', () => {
       disableAllHooks: true,
       hooks: { userPromptSubmitted: [userHook], sessionStart: [userHook] },
     }, null, 2);
-    mkdirSync(copilotHome(d));
+    const ext = join(copilotHome(d), 'extensions/minprompt/extension.mjs');
+    mkdirSync(join(copilotHome(d), 'extensions/minprompt'), { recursive: true });
     writeFileSync(settings, existing);
+    writeFileSync(ext, '// an older extension\n');
 
-    const preview = install(d, 'n');
+    const preview = install(d, 'n\nn');
     assert.equal(readFileSync(settings, 'utf8'), existing, '"n" leaves the file byte-identical');
+    assert.equal(readFileSync(ext, 'utf8'), '// an older extension\n', '"n" leaves the extension');
+    assert.match(preview, /^-\/\/ an older extension$/m, 'extension diff');
     assert.match(preview, /^--- .*settings\.json\n\+\+\+ .*settings\.json \(merged\)\n/m, 'diff -u preview');
     assert.match(preview, /^-  "disableAllHooks": true,$/m);
     assert.match(preview, /^\+  "disableAllHooks": false,$/m);
@@ -131,7 +135,8 @@ test('install.sh merges into an existing settings.json', () => {
       assert.ok(preview.includes('Existing values that change:') && preview.includes(line), `preview lists ${line}`);
     }
 
-    install(d, 'y');
+    install(d, 'y\ny');
+    assert.equal(readFileSync(ext, 'utf8'), readFileSync(join(ours, 'extensions/minprompt/extension.mjs'), 'utf8'), '"y" replaces the extension');
     const merged = JSON.parse(readFileSync(settings, 'utf8'));
     const our = JSON.parse(readFileSync(join(ours, 'settings.json'), 'utf8'));
     assert.equal(merged.banner, 'never', 'own key kept');
@@ -197,11 +202,28 @@ async function waitFor<T>(what: string, check: () => T | undefined, timeout = 60
   throw new Error(`timed out waiting for ${what}`);
 }
 
+// Copilot's native binary outlives tmux kill-server for a while and keeps writing into HOME,
+// so kill everything the tmux pane started and wait until it is gone.
+async function killGroup(pgid: number) {
+  const alive = () => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      throw err;
+    }
+  };
+  if (alive()) process.kill(-pgid, 'SIGKILL');
+  await waitFor('the copilot processes to exit', () => !alive(), 10_000);
+}
+
 for (const family of families) {
   test(`interactive copilot through /clear and /new on ${family.model}`, async () => {
     const d = scratch();
     const tmuxEnv = { PATH: process.env.PATH, TMUX_TMPDIR: d.tmp };
-    const tmux = (...args: string[]) => execFileSync('tmux', ['-L', 'copilot-min', ...args], { env: tmuxEnv, encoding: 'utf8' });
+    const tmux = (...args: string[]) => execFileSync('tmux', ['-L', 'copilot-min', ...args], { env: tmuxEnv, encoding: 'utf8', stdio: 'pipe' });
+    let pane = 0;
     const llm = await startFakeLlm({
       parent: [
         { tool: 'task', args: { name: 'reader', agent_type: 'gp', description: 'Read hello.txt', prompt: 'Read hello.txt' } },
@@ -216,6 +238,7 @@ for (const family of families) {
       const env = Object.entries(copilotEnv(d, family, llm.url)).map(([k, v]) => `${k}='${v}'`).join(' ');
       writeFileSync(join(d.dir, 'run.sh'), `#!/bin/sh\ncd '${d.project}'\nexec env -i TERM="$TERM" LANG=C.UTF-8 ${env} copilot --sync-session off\n`, { mode: 0o755 });
       tmux('new-session', '-d', '-s', 'main', '-x', '200', '-y', '50', join(d.dir, 'run.sh'));
+      pane = Number(tmux('display-message', '-p', '-t', 'main', '#{pane_pid}'));
 
       const sessions = join(copilotHome(d), 'session-state');
       const markers = () => existsSync(sessions)
@@ -259,10 +282,12 @@ for (const family of families) {
       renameSync(marker + '.aside', marker);
       await prompt('after /new');
     } finally {
+      if (pane) await killGroup(pane);
       try {
         tmux('kill-server');
       } catch (err) {
-        if (!String(err).includes('no server running')) throw err;
+        // The server exits by itself once its only pane is gone.
+        if (!/no server running|error connecting/.test(String(err))) throw err;
       }
       llm.close();
       rmSync(d.dir, { recursive: true, force: true });

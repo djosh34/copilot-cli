@@ -49,7 +49,7 @@ else
       echo "Existing values that change:"
       echo "$changed"
     fi
-    if ask "Apply to $settings?"; then
+    if ask "Apply?"; then
       printf '%s\n' "$merged" > "$settings"
       echo "Updated $settings."
     else
@@ -65,7 +65,7 @@ if [ ! -e "$ext" ]; then
   echo "Wrote $ext."
 elif ! cmp -s "$src/extensions/minprompt/extension.mjs" "$ext"; then
   show_diff "$ext" "$ext (new)" "$ext" "$src/extensions/minprompt/extension.mjs"
-  if ask "Replace $ext?"; then
+  if ask "Apply?"; then
     cp "$src/extensions/minprompt/extension.mjs" "$ext"
     echo "Updated $ext."
   else

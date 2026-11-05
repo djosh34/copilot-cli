@@ -2,7 +2,7 @@
 
 GitHub Copilot CLI with the smallest context that still has subagents, shell, file read/write, web fetch and skills.
 
-A default Copilot CLI session sends about 14,000 tokens before your first word (system prompt about 6,000, tool schemas about 8,000). This setup sends about 2,000: no system prompt, six or seven tools, one subagent type with no prompt either. Both counts are from a GPT model in `-p` mode on a clean install, counted with o200k; Claude counts the same request about 1.8 times larger. Copilot bills per token (legacy annual plans still per request), and that fixed part is re-sent on every model call, mostly at the cheaper cached rate.
+A default Copilot CLI session sends about 14,000 tokens before your first word (system prompt about 6,000, tool schemas about 8,000). This setup sends about 2,000: no system prompt, six or seven tools, one subagent type with no prompt either. Both counts are from a GPT model in `-p` mode on a clean install, counted with o200k, and were measured on this repo's earlier setup; the current one adds about 127 tokens to each GPT subagent call (see [What the model gets](#what-the-model-gets)). Claude counts the same request about 1.8 times larger. Copilot bills per token (legacy annual plans still per request), and that fixed part is re-sent on every model call, mostly at the cheaper cached rate.
 
 Tested on Copilot CLI 1.0.105.
 
@@ -11,95 +11,100 @@ Tested on Copilot CLI 1.0.105.
 ```sh
 npm install -g @github/copilot@1.0.105
 git clone https://github.com/djosh34/copilot-cli
-mkdir -p ~/.copilot-min && cp -r copilot-cli/copilot-min/. ~/.copilot-min/
+cd copilot-cli
+./install.sh
+ln -s "$PWD/bin/copilot-min" ~/.local/bin/copilot-min   # any directory on your PATH
 ```
 
-`~/.copilot-min` is a separate Copilot home, so your normal `copilot` and `~/.copilot` stay as they are. Running the copy again overwrites the files that came from this repo.
+`install.sh` merges the setup into your existing Copilot home, `~/.copilot` (or `$COPILOT_HOME`). After that, every `copilot` session is the minimal one, also after `/clear`, `/new`, `/resume` and `--continue`. Your login, sessions and skills stay the ones you already have: nothing to log in again, nothing else to copy.
+
+Before it changes anything, `install.sh` shows a `diff -u` of your `settings.json` against the merged one, lists each existing value that changes, and asks `Apply? [y/N]`. Anything but `y` leaves the file as it was. A different `extension.mjs` (for example after a `git pull`) gets the same diff and question. Running it again when nothing changed does nothing. It needs `jq`.
 
 ## Run
 
 ```sh
-COPILOT_HOME=~/.copilot-min \
-GH_TOKEN=$(gh auth token) \
-NODE_USE_ENV_PROXY=1 \
-COPILOT_LARGE_OUTPUT_THRESHOLD_BYTES=8192 \
-copilot --experimental --yolo --no-auto-update \
-  --available-tools=task,bash,view,apply_patch,create,edit,web_fetch,skill \
-  --disable-builtin-mcps --no-ask-user --no-custom-instructions \
-  --name copilot-min --disable-client-telemetry --sync-session off
+copilot        # the minimal setup, in the current directory
+copilot-min    # the same, plus the three flags below
 ```
 
-| Part | What it does |
-|---|---|
-| `COPILOT_HOME=~/.copilot-min` | Uses the files below instead of `~/.copilot`. |
-| `GH_TOKEN=$(gh auth token)` | Logs in with your `gh` login; no `copilot login` needed in the new home. |
-| `NODE_USE_ENV_PROXY=1` | Sends the extension's own model calls through `HTTPS_PROXY`. Without it they bypass your proxy. |
-| `COPILOT_LARGE_OUTPUT_THRESHOLD_BYTES=8192` | Bash output over 8 KB goes to a temp file and the model gets the first 500 characters; `view` refuses files over 8 KB unless the model sets `forceReadLargeFiles`. Default is 20 KB. Undocumented. |
-| `--experimental` | Loads the extension that removes the system prompt. |
-| `--yolo` | No approval prompts for tools, paths or URLs. |
-| `--no-auto-update` | Stays on the installed Copilot version. Without it, `copilot` runs the newest version your normal Copilot has downloaded, and the extension may not work with it. |
-| `--available-tools=...` | Allowlist. GPT models get `bash, apply_patch, view, web_fetch, skill, task`; Claude models get `bash, view, create, edit, web_fetch, skill, task`. Names a model family doesn't have are ignored. |
-| `--disable-builtin-mcps` | Stops the GitHub MCP server. For an MCP server a project defines in `.github/mcp.json`, add `--disable-mcp-server <name>`. |
-| `--no-ask-user` | Removes the `ask_user` tool. |
-| `--no-custom-instructions` | Skips AGENTS.md, CLAUDE.md and `.github/copilot-instructions.md`. |
-| `--name copilot-min` | Skips the side call that generates a session title. |
-| `--disable-client-telemetry`, `--sync-session off` | No telemetry or session upload. |
+`bin/copilot-min` runs `copilot --disable-client-telemetry --no-auto-update --yolo "$@"` in the directory you call it from, so any other `copilot` option works with it too. These three flags have no setting:
+
+| Flag | What it does | Why not a setting |
+|---|---|---|
+| `--disable-client-telemetry` | No telemetry POST and no releases lookup. | No setting or session field turns them off. |
+| `--no-auto-update` | Stays on the installed Copilot version. Without it, `copilot` runs a newer version it has already downloaded, and the extension may not work with that. | `autoUpdate: false` only stops downloads; a version already in `~/.cache/copilot` still runs. |
+| `--yolo` | No approval prompts, also in `-p`. | `defaultPermissionMode: "allow-all"` covers interactive sessions only. |
+
+So `copilot -p` needs `--yolo` (or use `copilot-min -p`); without it, `bash` and `web_fetch` get "Denied, no one to approve".
 
 Copilot still asks once per folder whether you trust it; pick "remember" to stop that.
 
-## What's in `~/.copilot-min`
+## What is merged into `~/.copilot`
 
 ```
-copilot-min/
-├── extensions/minprompt/extension.mjs   empty system prompt; strips Copilot's system text from subagent requests
-├── agents/gp.agent.md                   the one subagent: name and description, no prompt
-├── settings.json                        built-in subagents off, memory off, IDE auto-connect off
-└── skills/                              your skills, one folder each
+~/.copilot/
+├── settings.json                        the keys below, merged into yours
+└── extensions/minprompt/extension.mjs   empty system prompt, the gp subagent, tool allowlist
 ```
 
-`settings.json`:
+`settings.json` ([`copilot-min/settings.json`](copilot-min/settings.json)). On a conflict ours wins, except for two lists: `subagents.disabledSubagents` keeps your entries and adds ours (and removes `gp`, our subagent), and `hooks.userPromptSubmitted` puts our hook first and keeps yours after it.
 
-```json
-{
-  "memory": false,
-  "ide": { "autoConnect": false },
-  "subagents": {
-    "disabledSubagents": ["explore", "task", "general-purpose", "code-review", "research", "security-review", "rubber-duck"]
-  }
-}
+| Key | What it does |
+|---|---|
+| `experimental: true` | Loads the extension. |
+| `memory: false` | No memory tool or memory prompt. |
+| `ide.autoConnect: false` | No automatic IDE connection. |
+| `subagents.disabledSubagents` | Turns off the 7 built-in subagents, so `task` offers only `gp`. |
+| `defaultPermissionMode: "allow-all"` | No approval prompts in interactive sessions. |
+| `autoUpdate: false` | Doesn't download new Copilot versions. |
+| `askUser: false` | Removes the `ask_user` tool. |
+| `disabledMcpServers: ["github-mcp-server", "githubiq"]` | Stops the built-in GitHub MCP servers. |
+| `remoteExport: false` | No session sync to your GitHub account. |
+| `disableAllHooks: false` | Keeps hooks on, so the guard below runs. |
+| `hooks.userPromptSubmitted` | The guard: refuses a prompt sent before the extension has loaded (see [When it breaks](#when-it-breaks)). |
+
+The extension ([`src/extension.mts`](src/extension.mts)) joins each session and sets:
+
+| Field | What it does |
+|---|---|
+| `systemMessage: { mode: 'replace', content: '' }` | Empty main system prompt. |
+| `customAgents: [gp]` | The one subagent, `gp`: name and description, no prompt, all 11 of Copilot's prompt parts off. |
+| `availableTools` | Allowlist `task, bash, view, apply_patch, create, edit, web_fetch, skill`. GPT models get `bash, apply_patch, view, web_fetch, skill, task`; Claude models get `bash, view, create, edit, web_fetch, skill, task`. |
+| `skipCustomInstructions: true` | Skips AGENTS.md, CLAUDE.md and `.github/copilot-instructions.md`. |
+| `largeOutput: { maxSizeBytes: 8192 }` | Bash output over 8 KB goes to a temp file and the model gets the first 500 characters; `view` refuses files over 8 KB unless the model sets `forceReadLargeFiles`. Default is 20 KB. |
+| `suppressResumeEvent: true` | Joining doesn't add a resume event to the session. |
+| `requestPermission: false` | Doesn't ask to handle permission requests. Without it, Copilot denies the extension in `-p` without `--yolo`. |
+
+It joins again when `/resume` brings back a session that `/new` left open, and writes a ready marker for the guard after each join.
+
+## How the extension runs
+
+Copilot starts one extension process per open session, using its own built-in Node, so you need no Node of your own to run it. `/new` leaves the earlier session's extension running until you `/exit`. Each one is about 67 MB. No model traffic goes through it: it only sets the session up, and Copilot makes every model call itself.
+
+## What the model gets
+
+- **Main agent:** no system prompt, only the tool descriptions and the current date and time on each message: no working directory, OS, safety rules or AGENTS.md.
+- **`gp` subagent:** no system prompt on Claude. On GPT, Copilot adds its `<subagent_usage>` block (about 127 tokens), which the extension can't remove.
+
+Agent files you add (`~/.copilot/agents`, a repo's `.github/agents` or `.claude/agents`) show up in `task` next to `gp`. To keep only `gp`, add their names to `subagents.disabledSubagents` in `~/.copilot/settings.json`.
+
+Skills are your own, in `~/.copilot/skills` or a repo's skill folders. A `SKILL.md` without the `name` and `description` frontmatter is silently ignored. The `skill` tool costs about 400 tokens on the main agent and 160 per subagent call, plus about 40 per skill (measured on the earlier setup).
+
+## When it breaks
+
+Right after start, `/clear`, `/new` or `/resume`, the extension takes about half a second to load. A prompt sent before then is refused with:
+
+```
+! Minimal prompt not loaded yet. Send your prompt again.
 ```
 
-`agents/gp.agent.md`:
+Press Up and Enter to send it again. Without this guard, such a prompt would go out with Copilot's full system prompt and tools.
 
-```markdown
----
-name: gp
-description: General-purpose agent.
----
-```
-
-A repo with its own agent files (`.github/agents/*.agent.md`, `.claude/agents/*.agent.md`) adds those agents next to `gp`. To keep only `gp`, add their names to `disabledSubagents` in `~/.copilot-min/settings.json`.
-
-Add a skill, for example one called `commit`:
-
-```sh
-mkdir -p ~/.copilot-min/skills/commit
-cat > ~/.copilot-min/skills/commit/SKILL.md <<'EOF'
----
-name: commit
-description: Write a commit message for the staged changes.
----
-Read `git diff --staged` and write a one-line commit message.
-EOF
-```
-
-A `SKILL.md` without the `name` and `description` frontmatter is silently ignored.
-
-The `skill` tool costs about 400 tokens on the main agent and 160 per subagent call, plus about 40 per skill.
+The extension uses internal Copilot SDK calls and may stop working with another Copilot version. Then every prompt is refused with that message. Check that `copilot --version` says 1.0.105, and look in `~/.copilot/logs/` for the extension's errors.
 
 ## Measured
 
-Interactive session with the command above, real Copilot route (Auto picked gpt-5.6-luna), after one prompt that started a `gp` subagent running `echo` and ran `echo` itself. `/context` showed:
+On this repo's earlier setup (separate Copilot home, run flags, an extension that also edited subagent requests): an interactive session on the real Copilot route (Auto picked gpt-5.6-luna), after one prompt that started a `gp` subagent running `echo` and ran `echo` itself. `/context` showed:
 
 | | Tokens |
 |---|---:|
@@ -110,20 +115,22 @@ Interactive session with the command above, real Copilot route (Auto picked gpt-
 
 The whole session cost 0.14 AI credits. Full captures, every tool schema and the default system prompt are in [the research issues](https://github.com/djosh34/copilot-cli/issues/1).
 
-## When it breaks
-
-The extension uses internal Copilot SDK calls and may stop working with another Copilot version. Copilot then still answers, but with its full system prompt: `/context` shows thousands of system prompt tokens instead of 4. Look for `Failed to load extension` in `~/.copilot-min/logs/`, and check that `copilot --version` says 1.0.105.
-
-With no system prompt the model gets only the tool descriptions and the current date and time on each message: no working directory, OS, safety rules or AGENTS.md.
-
 ## Develop
 
-The extension is written in `src/extension.mts` and built into `copilot-min/extensions/minprompt/extension.mjs`, which is committed so installing stays a copy.
+The extension is written in `src/extension.mts` and built into `copilot-min/extensions/minprompt/extension.mjs`, which is committed so installing needs no build.
 
 ```sh
 npm ci
 npm run build   # tsc against @github/copilot-sdk 1.0.28 (built for Copilot CLI 1.0.105)
-npm test        # typecheck, then run Copilot CLI 1.0.105 with the Run command above against a fake model
+npm test        # typecheck, then the end-to-end test against a fake model
+shellcheck install.sh bin/copilot-min
 ```
 
-The test starts a fake model server (`test/fake-llm.ts`) and runs Copilot in BYOK mode, so it needs no login, token or AI. For a GPT and a Claude model it checks that no main or subagent request carries system text, that the tool list is the one above, that `task` offers only `gp`, and that both subagents read a file and their results reach the main agent. It can't reach the WebSocket path the real Copilot route uses; that part was checked by hand.
+The test starts a fake model server (`test/fake-llm.ts`) and runs Copilot CLI 1.0.105 in BYOK mode in a throwaway `HOME`, so it needs no login, token or AI. It needs `jq` and `tmux`. It checks:
+
+- `install.sh` into an empty `~/.copilot`, and into one with its own settings and hooks: the preview, `n` changes nothing, `y` merges, a second run changes nothing.
+- `copilot -p --yolo`, `copilot-min -p` and `copilot -p` without `--yolo`, for a GPT and a Claude model: no system text in main requests, only `<subagent_usage>` in GPT subagent requests, the tool lists above, `task` offers only `gp`, and both subagents read a file and their results reach the main agent.
+- Interactive `copilot` in tmux, both models: a prompt, `/clear`, a prompt, `/new`, a prompt, each with the same checks.
+- The guard: with the ready marker moved aside, a prompt is refused and nothing reaches the model; with it back, the prompt goes out minimal.
+
+It can't reach the WebSocket path the real Copilot route uses.
