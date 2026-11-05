@@ -73,9 +73,8 @@ The extension ([`src/extension.mts`](src/extension.mts)) joins each session and 
 | `skipCustomInstructions: true` | Skips AGENTS.md, CLAUDE.md and `.github/copilot-instructions.md`. |
 | `largeOutput: { maxSizeBytes: 8192 }` | Bash output over 8 KB goes to a temp file and the model gets the first 500 characters; `view` refuses files over 8 KB unless the model sets `forceReadLargeFiles`. Default is 20 KB. |
 | `suppressResumeEvent: true` | Joining doesn't add a resume event to the session. |
-| `requestPermission: false` | Doesn't ask to handle permission requests. Without it, Copilot denies the extension in `-p` without `--yolo`. |
 
-It joins again when `/resume` brings back a session that `/new` left open, and writes a ready marker for the guard after each join.
+It also sends `requestPermission: false` with its `session.resume` request, so it doesn't ask to handle permission requests; without that, Copilot denies the extension in `-p` without `--yolo`. A config field of that name exists, but the SDK overwrites it. It joins again when `/resume` brings back a session that `/new` left open, and writes a ready marker for the guard after each join.
 
 ## How the extension runs
 

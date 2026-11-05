@@ -2,18 +2,17 @@
 // fake model, and checks what Copilot sent: no system text, the expected tools, only the gp subagent, and that the
 // subagents read the file and their results reached the main agent. Also checks the install merge and the guard hook.
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { promisify } from 'node:util';
 import { startFakeLlm, type Recorded, type Script } from './fake-llm.ts';
 
 const root = join(import.meta.dirname, '..');
 const ours = join(root, 'copilot-min');
-const run = promisify(execFile);
 
 const families: { model: string; provider: Record<string, string>; tools: string[] }[] = [
   { model: 'gpt-6-sol', provider: { COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_WIRE_API: 'responses' }, tools: ['bash', 'apply_patch', 'view', 'web_fetch', 'skill', 'task'] },
@@ -157,43 +156,6 @@ test('install.sh merges into an existing settings.json', () => {
   }
 });
 
-for (const family of families) {
-  test(`copilot -p and copilot-min -p on ${family.model}`, async () => {
-    const d = scratch();
-    try {
-      install(d, 'y');
-      const commands = [
-        { name: 'copilot -p --yolo', file: 'copilot', args: ['--yolo'] },
-        { name: 'copilot-min -p', file: join(root, 'bin/copilot-min'), args: [] },
-      ];
-      for (const command of commands) {
-        const llm = await startFakeLlm(twoSubagents(d));
-        try {
-          const { stdout } = await run(command.file, ['-p', 'Read hello.txt with two subagents', ...command.args, '--sync-session', 'off'],
-            { cwd: d.project, timeout: 180_000, env: copilotEnv(d, family, llm.url) });
-          assert.match(stdout, /parent-done/, command.name);
-          checkCalls(llm.requests, family, 2);
-        } finally {
-          llm.close();
-        }
-      }
-
-      // Without --yolo the extension must not ask for permission handling, or Copilot denies it and gp goes missing.
-      const llm = await startFakeLlm({ parent: [{ text: 'parent-done' }], subagent: [] });
-      try {
-        const { stdout } = await run('copilot', ['-p', 'Say hi', '--sync-session', 'off'],
-          { cwd: d.project, timeout: 180_000, env: copilotEnv(d, family, llm.url) });
-        assert.match(stdout, /parent-done/);
-        checkCalls(llm.requests, family, 0);
-      } finally {
-        llm.close();
-      }
-    } finally {
-      rmSync(d.dir, { recursive: true, force: true });
-    }
-  });
-}
-
 async function waitFor<T>(what: string, check: () => T | undefined, timeout = 60_000): Promise<T> {
   for (const end = Date.now() + timeout; Date.now() < end; await sleep(100)) {
     const value = check();
@@ -202,8 +164,8 @@ async function waitFor<T>(what: string, check: () => T | undefined, timeout = 60
   throw new Error(`timed out waiting for ${what}`);
 }
 
-// Copilot's native binary outlives tmux kill-server for a while and keeps writing into HOME,
-// so kill everything the tmux pane started and wait until it is gone.
+// Copilot's native binary outlives a killed npm loader (or tmux kill-server) for a while and keeps writing
+// into HOME, so kill the whole process group and wait until it is gone.
 async function killGroup(pgid: number) {
   const alive = () => {
     try {
@@ -216,6 +178,58 @@ async function killGroup(pgid: number) {
   };
   if (alive()) process.kill(-pgid, 'SIGKILL');
   await waitFor('the copilot processes to exit', () => !alive(), 10_000);
+}
+
+// Runs copilot in its own process group, so a timeout or failure leaves nothing running.
+async function runCopilot(file: string, args: string[], cwd: string, env: Record<string, string>) {
+  const child = spawn(file, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', s => (stdout += s));
+  child.stderr.setEncoding('utf8').on('data', s => (stderr += s));
+  try {
+    const [code] = await once(child, 'close', { signal: AbortSignal.timeout(180_000) });
+    assert.equal(code, 0, `${file} ${args.join(' ')} exited with ${code}\n${stderr}`);
+    return stdout;
+  } finally {
+    await killGroup(child.pid!);
+  }
+}
+
+for (const family of families) {
+  test(`copilot -p and copilot-min -p on ${family.model}`, async () => {
+    const d = scratch();
+    try {
+      install(d, 'y');
+      const commands = [
+        { name: 'copilot -p --yolo', file: 'copilot', args: ['--yolo'] },
+        { name: 'copilot-min -p', file: join(root, 'bin/copilot-min'), args: [] },
+      ];
+      for (const command of commands) {
+        const llm = await startFakeLlm(twoSubagents(d));
+        try {
+          const stdout = await runCopilot(command.file, ['-p', 'Read hello.txt with two subagents', ...command.args, '--sync-session', 'off'],
+            d.project, copilotEnv(d, family, llm.url));
+          assert.match(stdout, /parent-done/, command.name);
+          checkCalls(llm.requests, family, 2);
+        } finally {
+          llm.close();
+        }
+      }
+
+      // Without --yolo the extension must not ask for permission handling, or Copilot denies it and gp goes missing.
+      const llm = await startFakeLlm({ parent: [{ text: 'parent-done' }], subagent: [] });
+      try {
+        const stdout = await runCopilot('copilot', ['-p', 'Say hi', '--sync-session', 'off'], d.project, copilotEnv(d, family, llm.url));
+        assert.match(stdout, /parent-done/);
+        checkCalls(llm.requests, family, 0);
+      } finally {
+        llm.close();
+      }
+    } finally {
+      rmSync(d.dir, { recursive: true, force: true });
+    }
+  });
 }
 
 for (const family of families) {

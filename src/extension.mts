@@ -29,7 +29,7 @@ type Internal = {
 const id = process.env.SESSION_ID;
 // Ready marker for the userPromptSubmitted hook in settings.json: this session, this copilot process.
 // It holds the time the last join finished plus 500 ms; the hook refuses interactive prompts submitted before then.
-const marker = `${process.env.COPILOT_HOME ?? homedir() + '/.copilot'}/session-state/${id}/minprompt.${process.ppid}`;
+const marker = `${process.env.COPILOT_HOME || homedir() + '/.copilot'}/session-state/${id}/minprompt.${process.ppid}`;
 const client = new CopilotClient({ _internalConnection: { kind: 'parent-process' } } as CopilotClientOptions);
 const internal = client as unknown as Internal;
 await client.start();
