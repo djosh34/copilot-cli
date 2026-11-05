@@ -34,7 +34,7 @@ const client = new CopilotClient({ _internalConnection: { kind: 'parent-process'
 const internal = client as unknown as Internal;
 await client.start();
 // Don't ask to handle permission requests, as joinSession() doesn't; else -p without --yolo denies the extension.
-// The config field of that name is overwritten by the SDK, so set it on the request.
+// The SDK sets that value itself and ignores it in the join config, so set it on the request.
 const send = internal.connection.sendRequest.bind(internal.connection);
 internal.connection.sendRequest = (m, p, ...r) => send(m, m === 'session.resume' ? { ...p, requestPermission: false } : p, ...r);
 const join = async () => {

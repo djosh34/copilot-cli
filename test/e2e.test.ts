@@ -192,7 +192,7 @@ async function runCopilot(file: string, args: string[], cwd: string, env: Record
     assert.equal(code, 0, `${file} ${args.join(' ')} exited with ${code}\n${stderr}`);
     return stdout;
   } finally {
-    await killGroup(child.pid!);
+    if (child.pid) await killGroup(child.pid);
   }
 }
 
