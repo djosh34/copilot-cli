@@ -15,3 +15,5 @@ jobs:
       - run: npm run build
       - name: Built extension matches src
         run: git diff --exit-code copilot-min/
+      - name: End-to-end test against a fake model (no AI, no secrets)
+        run: npm test

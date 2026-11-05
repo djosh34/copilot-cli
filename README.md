@@ -104,3 +104,15 @@ The whole session cost 0.14 AI credits. Full captures, every tool schema and the
 The extension uses internal Copilot SDK calls and may stop working after a Copilot update. If Copilot never answers, look for `session.resume failed` in `~/.copilot-min/logs/`, and run with Copilot CLI 1.0.105 (`copilot --version`).
 
 With no system prompt the model gets only the tool descriptions: no working directory, OS, safety rules or AGENTS.md.
+
+## Develop
+
+The extension is written in `src/extension.mts` and built into `copilot-min/extensions/minprompt/extension.mjs`, which is committed so installing stays a copy.
+
+```sh
+npm ci
+npm run build   # tsc against @github/copilot-sdk 1.0.28 (built for Copilot CLI 1.0.105)
+npm test        # typecheck, then run Copilot CLI 1.0.105 with the Run command above against a fake model
+```
+
+The test starts a fake model server (`test/fake-llm.ts`) and runs Copilot in BYOK mode, so it needs no login, token or AI. For a GPT and a Claude model it checks that no main or subagent request carries system text, that the tool list is the one above, and that `task` offers only `gp`. It can't reach the WebSocket path the real Copilot route uses; that part was checked by hand.
