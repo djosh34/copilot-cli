@@ -3,7 +3,7 @@
 // and that both subagents read the file and their results reached the main agent.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -89,6 +89,7 @@ for (const family of families) {
       }
     } finally {
       llm.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 }
