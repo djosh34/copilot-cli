@@ -51,6 +51,23 @@ export function copilotEnv(d: Scratch, family: Family, url: string): Record<stri
   };
 }
 
+// A named BYOK catalog (COPILOT_PROVIDERS_CONFIG) with the family's model and a second one, for the model picker.
+// Copilot 1.0.105 gives catalog models create and edit, never apply_patch, also on the GPT wire API.
+export const catalogFamily = (family: Family): Family => ({ ...family, tools: ['bash', 'view', 'create', 'edit', 'web_fetch', 'skill', 'task'] });
+export const secondModel = (family: Family) => family.model.startsWith('gpt') ? 'gpt-6-luna' : 'claude-sonnet-5.5';
+export function catalogEnv(d: Scratch, family: Family, url: string): Record<string, string> {
+  const { COPILOT_PROVIDER_TYPE: type, COPILOT_PROVIDER_WIRE_API: wireApi } = family.provider;
+  const file = join(d.dir, 'providers.json');
+  const capabilities = { supports: { vision: true } };
+  writeFileSync(file, JSON.stringify({
+    providers: [{ name: 'fake', type, wireApi, baseUrl: url, apiKey: 'fake' }],
+    models: [family.model, secondModel(family)].map(id => ({ id, provider: 'fake', capabilities })),
+  }));
+  const env = copilotEnv(d, family, url);
+  for (const key of Object.keys(env)) if (key.startsWith('COPILOT_PROVIDER_')) delete env[key];
+  return { ...env, COPILOT_PROVIDERS_CONFIG: file, COPILOT_MODEL: `fake/${family.model}` };
+}
+
 export const toolNames = (r: Recorded): string[] => r.body.tools.map((t: any) => t.name ?? t.function?.name);
 export const systemText = (r: Recorded): unknown[] => [
   ...(r.body.system?.length ? [r.body.system] : []),
@@ -59,7 +76,7 @@ export const systemText = (r: Recorded): unknown[] => [
 ];
 
 // Every request is minimal: no system text in main requests, only Copilot's <subagent_usage> block in GPT subagent
-// requests (Claude's have none), the family's tools, and task offers exactly `agents`.
+// requests (Claude's have none), the family's tools, and task offers exactly `agents`. With no agents, there is no task.
 export function checkMinimal(requests: Recorded[], family: Family, agents = ['gp']) {
   const calls = requests.filter(r => r.body.tools);
   assert.ok(calls.some(r => !r.subagent), 'main requests were made');
@@ -74,19 +91,21 @@ export function checkMinimal(requests: Recorded[], family: Family, agents = ['gp
     } else {
       assert.deepEqual(system, [], `no system text in a ${where} request`);
     }
-    assert.deepEqual(toolNames(call), family.tools, `tools of a ${where} request`);
+    assert.deepEqual(toolNames(call), agents.length ? family.tools : family.tools.filter(t => t !== 'task'), `tools of a ${where} request`);
+    if (!agents.length) continue;
     const task = call.body.tools.find((t: any) => t.name === 'task');
     assert.deepEqual((task.parameters ?? task.input_schema).properties.agent_type.enum, agents, `task offers ${agents} in a ${where} request`);
   }
 }
 
-// checkMinimal, plus: `subagents` subagents read the file and their results reached the main agent.
-export function checkCalls(requests: Recorded[], family: Family, subagents: number) {
+// checkMinimal, plus: `subagents` subagents read the file and their results reached the main agent, after `earlier`
+// subagent results from earlier prompts of the session.
+export function checkCalls(requests: Recorded[], family: Family, subagents: number, earlier = 0) {
   checkMinimal(requests, family);
   const calls = requests.filter(r => r.body.tools);
   const main = calls.filter(r => !r.subagent);
   assert.equal(calls.filter(r => r.subagent && JSON.stringify(r.body).includes('hello from the file')).length, subagents, 'the subagents read the file');
-  assert.equal(JSON.stringify(main.at(-1)?.body).split('subagent-done').length - 1, subagents, 'the subagent results reached the main agent');
+  assert.equal(JSON.stringify(main.at(-1)?.body).split('subagent-done').length - 1, subagents + earlier, 'the subagent results reached the main agent');
 }
 
 export const twoSubagents = (d: Scratch): Script => ({

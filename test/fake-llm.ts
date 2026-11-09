@@ -11,12 +11,13 @@ export type Recorded = { subagent: boolean; body: any };
 
 const sse = (events: object[]) => events.map(e => `event: ${(e as any).type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 
-// The step to play is the number of tool results already sent back, so side requests don't shift it.
-function toolResults(body: any): number {
-  const input = (body.input ?? []).filter((i: any) => i.type === 'function_call_output');
+// The step to play is the number of tool results sent back for tool calls made since the script was set, so side
+// requests don't shift it and a new script starts at its first step, also in a session with earlier tool calls.
+function toolResults(body: any, since: number): number {
+  const input = (body.input ?? []).filter((i: any) => i.type === 'function_call_output').map((i: any) => i.call_id);
   const messages = (body.messages ?? []).flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
-    .filter((c: any) => c.type === 'tool_result');
-  return input.length + messages.length;
+    .filter((c: any) => c.type === 'tool_result').map((c: any) => c.tool_use_id);
+  return [...input, ...messages].filter(id => Number(/_(\d+)$/.exec(id)?.[1]) > since).length;
 }
 
 // Text streams in two pieces, as a real model streams it.
@@ -64,6 +65,8 @@ export async function startFakeLlm(initial: Script) {
   const requests: Recorded[] = [];
   const held: (() => void)[] = [];
   let n = 0;
+  let script = initial;
+  let scriptStart = 0;
   const server = createServer(async (req, res) => {
     if (req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'application/json' }).end('{"object":"list","data":[]}');
@@ -72,8 +75,8 @@ export async function startFakeLlm(initial: Script) {
     const body = await readBody(req);
     const subagent = req.headers['x-interaction-type'] === 'conversation-subagent';
     requests.push({ subagent, body });
-    const steps = subagent ? llm.script.subagent : llm.script.parent;
-    const step = steps[toolResults(body)] ?? steps[steps.length - 1];
+    const steps = subagent ? script.subagent : script.parent;
+    const step = steps[toolResults(body, scriptStart)] ?? steps[steps.length - 1];
     const answer = 'status' in step
       ? () => res.writeHead(step.status, { 'content-type': 'application/json' }).end('{"error":{"type":"invalid_request_error","message":"fake failure"}}')
       : () => res.writeHead(200, { 'content-type': 'text/event-stream' }).end(req.url?.endsWith('/responses') ? responses(step, ++n) : messages(step, ++n));
@@ -85,7 +88,13 @@ export async function startFakeLlm(initial: Script) {
   const llm = {
     url: `http://127.0.0.1:${port}`,
     requests,
-    script: initial,
+    get script() {
+      return script;
+    },
+    set script(next: Script) {
+      script = next;
+      scriptStart = n;
+    },
     held: () => held.length,
     release: () => held.splice(0).forEach(answer => answer()),
     close: () => {

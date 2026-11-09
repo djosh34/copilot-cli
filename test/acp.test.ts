@@ -1,119 +1,19 @@
-// Drives copilot-min --acp (the ACP adapter) with the official ACP SDK's client, after install.sh in a throwaway
+// Drives copilot-min --acp (the ACP adapter) with the official ACP SDK's client (test/acp-client.ts), after install.sh in a throwaway
 // home, against the fake model. Checks every raw ACP message against the v1 JSON schema, every model request with
 // checkMinimal/checkCalls, and the adapter's ACP behaviour. Also checks plain copilot --acp is refused, and that
 // install.sh replaces the guard of an earlier install.
 import * as acp from '@agentclientprotocol/sdk';
-import { Ajv2020 } from 'ajv/dist/2020.js';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { Readable, Writable } from 'node:stream';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { checkCalls, checkMinimal, copilotEnv, copilotHome, families, install, killGroup, ours, root, scratch, waitFor, type Family, type Scratch } from './common.ts';
-import { holdMarker, startFakeLlm, type Script } from './fake-llm.ts';
-
-// Validates each raw message's params or result against the schema type for its method and direction.
-const schema = JSON.parse(readFileSync(join(root, 'node_modules/@agentclientprotocol/sdk/schema/v1/schema.json'), 'utf8'));
-const ajv = new Ajv2020({ strict: false, validateFormats: false });
-ajv.addSchema(schema, 'acp');
-function typeFor(method: string, side: string, suffix: string): string {
-  const names = Object.keys(schema.$defs).filter(k => k.endsWith(suffix) && schema.$defs[k]['x-method'] === method && schema.$defs[k]['x-side'] === side);
-  assert.equal(names.length, 1, `one schema type for ${side} ${method} ${suffix}`);
-  return names[0];
-}
-function validate(name: string, value: unknown) {
-  const check = ajv.getSchema(`acp#/$defs/${name}`)!;
-  assert.ok(check(value), `${name} ${JSON.stringify(value)}: ${ajv.errorsText(check.errors)}`);
-}
-// The schema check can fail: a made-up stop reason and a text chunk without text are refused.
-assert.throws(() => validate('PromptResponse', { stopReason: 'bogus' }));
-assert.throws(() => validate('SessionNotification', { sessionId: 's', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text' } } }));
-type Wire = { from: 'client' | 'agent'; message: any }[];
-function validateWire(wire: Wire) {
-  const pending = new Map<string, string>();
-  for (const { from, message: m } of wire) {
-    const to = from === 'client' ? 'agent' : 'client';
-    assert.equal(m.jsonrpc, '2.0');
-    if ('method' in m) {
-      const kind = 'id' in m ? 'Request' : 'Notification';
-      if ('id' in m) pending.set(`${from}:${m.id}`, typeFor(m.method, to, 'Response'));
-      validate(typeFor(m.method, to, kind), m.params);
-    } else {
-      const name = pending.get(`${to}:${m.id}`);
-      assert.ok(name, `a response to a request: ${JSON.stringify(m)}`);
-      pending.delete(`${to}:${m.id}`);
-      if ('error' in m) assert.ok(Number.isInteger(m.error.code) && typeof m.error.message === 'string', JSON.stringify(m));
-      else validate(name, m.result);
-    }
-  }
-  assert.deepEqual([...pending.keys()], [], 'every request was answered');
-}
-
-// Starts an ACP agent process and connects the official client to it, recording every raw message.
-function connect(command: string, args: string[], d: Scratch, env: Record<string, string>) {
-  const child = spawn(command, args, { cwd: d.project, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  let stderr = '';
-  child.stderr.setEncoding('utf8').on('data', s => (stderr += s));
-  const wire: Wire = [];
-  const updates: acp.SessionNotification[] = [];
-  let permissionAsks = 0;
-  const base = acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
-  const record = (from: 'client' | 'agent') => new TransformStream({ transform(message, out) { wire.push({ from, message }); out.enqueue(message); } });
-  const toAgent = record('client');
-  toAgent.readable.pipeTo(base.writable).catch(err => (stderr += `\nwrite to agent failed: ${err}`));
-  const connection = acp.client({ name: 'acp-test' })
-    .onRequest('session/request_permission', () => {
-      permissionAsks++;
-      return { outcome: { outcome: 'cancelled' as const } };
-    })
-    .onNotification('session/update', ({ params }) => { updates.push(params); })
-    .connect({ writable: toAgent.writable, readable: base.readable.pipeThrough(record('agent')) });
-  const agent = connection.agent;
-  return {
-    agent, wire, updates,
-    pid: child.pid,
-    permissionAsks: () => permissionAsks,
-    stderr: () => stderr,
-    text: (sessionId: string) => updates.filter(u => u.sessionId === sessionId && u.update.sessionUpdate === 'agent_message_chunk')
-      .map(u => (u.update as { content: { text: string } }).content.text),
-    initialize: () => agent.request('initialize', { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: 'acp-test', version: '1' } }),
-    newSession: (mcpServers: acp.McpServer[] = []) => agent.request('session/new', { cwd: d.project, mcpServers }).then(r => r.sessionId),
-    prompt: (sessionId: string, prompt: acp.ContentBlock[] | string) => agent.request('session/prompt', {
-      sessionId, prompt: typeof prompt === 'string' ? [{ type: 'text', text: prompt }] : prompt,
-    }),
-    close: async () => {
-      connection.close();
-      if (child.pid) await killGroup(child.pid);
-    },
-  };
-}
-type Connection = ReturnType<typeof connect>;
-
-const adapter = (d: Scratch, env: Record<string, string>) => connect(join(root, 'bin/copilot-min'), ['--acp', '--sync-session', 'off'], d, env);
-
-// Runs one prompt and checks it ended normally, its streamed text, and the minimal requests it made.
-async function turn(c: Connection, llm: Awaited<ReturnType<typeof startFakeLlm>>, sessionId: string, prompt: acp.ContentBlock[] | string, text: string) {
-  const from = llm.requests.length;
-  const chunks = c.text(sessionId).length;
-  const result = await c.prompt(sessionId, prompt);
-  assert.equal(result.stopReason, 'end_turn', c.stderr());
-  const streamed = c.text(sessionId).slice(chunks);
-  assert.equal(streamed.join(''), text, 'streamed text, not empty and not doubled');
-  assert.equal(streamed.length, 2, 'in the two pieces the model sent');
-  return llm.requests.slice(from);
-}
-
-const oneSubagent = (d: Scratch): Script => ({
-  parent: [
-    { tool: 'task', args: { name: 'reader', agent_type: 'gp', description: 'Read hello.txt', prompt: 'Read hello.txt' } },
-    { text: 'parent-done' },
-  ],
-  subagent: [{ tool: 'view', args: { path: join(d.project, 'hello.txt') } }, { text: 'subagent-done' }],
-});
+import { adapter, connect, oneSubagent, turn, validateWire, type Connection } from './acp-client.ts';
+import { checkCalls, checkMinimal, copilotEnv, copilotHome, families, install, ours, scratch, waitFor, type Family } from './common.ts';
+import { holdMarker, startFakeLlm } from './fake-llm.ts';
 
 // An HTTP MCP server that only counts the requests it gets.
 async function mcpProbe() {
@@ -170,6 +70,18 @@ for (const family of families) {
       const output = JSON.stringify(requests.at(-1)?.body.input ?? requests.at(-1)?.body.messages);
       assert.match(output, /Saved to/, 'large output saved to a file');
       assert.doesNotMatch(output, /\b2499\b/, 'large output not inline');
+
+      // GPT edits with apply_patch on a relative path: the tool update carries the diff at the absolute path.
+      if (family.tools.includes('apply_patch')) {
+        writeFileSync(join(d.project, 'a.txt'), 'one\ntwo\n');
+        llm.script = { parent: [{ tool: 'apply_patch', args: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n one\n-two\n+TWO\n*** End Patch\n' } }, { text: 'patched' }], subagent: [] };
+        const patched = await c.newSession();
+        checkMinimal(await turn(c, llm, patched, 'Patch a.txt', 'patched'), family);
+        const updates = c.updates.filter(u => u.sessionId === patched).map(u => u.update as any);
+        assert.deepEqual(updates.find(u => u.sessionUpdate === 'tool_call').locations, [{ path: join(d.project, 'a.txt') }]);
+        const diffs = updates.flatMap(u => u.content ?? []).filter((x: any) => x.type === 'diff');
+        assert.deepEqual(diffs[0], { type: 'diff', path: join(d.project, 'a.txt'), oldText: 'one\ntwo\n', newText: 'one\nTWO\n' });
+      }
 
       // A failing subagent doesn't end the prompt: the task tool fails, then the main agent answers.
       llm.script = { parent: oneSubagent(d).parent, subagent: [{ status: 400 }] };
