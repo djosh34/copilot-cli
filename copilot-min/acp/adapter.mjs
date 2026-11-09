@@ -9662,10 +9662,8 @@ await copilot.start();
 var env = process.env;
 var providersFile = env.COPILOT_PROVIDERS_CONFIG?.trim();
 var byok = providersFile ? {
-  model: env.COPILOT_MODEL,
   ...JSON.parse(readFileSync(providersFile, "utf8"))
 } : env.COPILOT_PROVIDER_BASE_URL ? {
-  model: env.COPILOT_MODEL,
   provider: {
     baseUrl: env.COPILOT_PROVIDER_BASE_URL,
     apiKey: env.COPILOT_PROVIDER_API_KEY,
@@ -9837,7 +9835,7 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
 })).onRequest("session/new", logged(async ({ params }) => {
   const config2 = sessionConfig(params.cwd);
   await checkLogin();
-  return open2(await copilot.createSession(config2), params.cwd);
+  return open2(await copilot.createSession({ ...config2, model: byok ? env.COPILOT_MODEL : void 0 }), params.cwd);
 })).onRequest("session/load", logged(async ({ params }) => {
   const config2 = sessionConfig(params.cwd);
   await checkLogin();
@@ -9846,7 +9844,11 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
     sessions.delete(params.sessionId);
     await open_.session.disconnect();
   }
-  const session = await copilot.resumeSession(params.sessionId, config2);
+  const session = await copilot.resumeSession(params.sessionId, {
+    ...config2,
+    customAgents: [],
+    availableTools: minimal.availableTools.filter((tool) => tool !== "task")
+  });
   const { configOptions: configOptions2 } = await open2(session, params.cwd, await session.getEvents());
   return { configOptions: configOptions2 };
 })).onRequest("session/list", logged(async ({ params }) => {

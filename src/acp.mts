@@ -49,10 +49,8 @@ await copilot.start();
 const env = process.env;
 const providersFile = env.COPILOT_PROVIDERS_CONFIG?.trim();
 const byok = providersFile ? {
-  model: env.COPILOT_MODEL,
   ...JSON.parse(readFileSync(providersFile, 'utf8')) as Pick<Copilot.SessionConfig, 'providers' | 'models'>,
 } : env.COPILOT_PROVIDER_BASE_URL ? {
-  model: env.COPILOT_MODEL,
   provider: {
     baseUrl: env.COPILOT_PROVIDER_BASE_URL,
     apiKey: env.COPILOT_PROVIDER_API_KEY,
@@ -259,7 +257,8 @@ const app = acp.agent({ name: 'copilot-min' })
   .onRequest('session/new', logged(async ({ params }) => {
     const config = sessionConfig(params.cwd);
     await checkLogin();
-    return open(await copilot.createSession(config), params.cwd);
+    // BYOK starts on COPILOT_MODEL, as Copilot does; with a login, Copilot picks the model from your settings.
+    return open(await copilot.createSession({ ...config, model: byok ? env.COPILOT_MODEL : undefined }), params.cwd);
   }))
   .onRequest('session/load', logged(async ({ params }) => {
     const config = sessionConfig(params.cwd);
@@ -269,7 +268,13 @@ const app = acp.agent({ name: 'copilot-min' })
       sessions.delete(params.sessionId);
       await open_.session.disconnect();
     }
-    const session = await copilot.resumeSession(params.sessionId, config);
+    // A loaded session keeps the model it was switched to. It gets no subagents: when the SDK reopens a session,
+    // Copilot 1.0.105 drops the custom agent's promptParts, so gp would get Copilot's full subagent prompt (#102).
+    const session = await copilot.resumeSession(params.sessionId, {
+      ...config,
+      customAgents: [],
+      availableTools: minimal.availableTools.filter(tool => tool !== 'task'),
+    });
     const { configOptions } = await open(session, params.cwd, await session.getEvents());
     return { configOptions };
   }))
