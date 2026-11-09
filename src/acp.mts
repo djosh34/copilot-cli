@@ -48,9 +48,8 @@ await copilot.start();
 // COPILOT_PROVIDERS_CONFIG names a JSON file with a catalog of providers and models, which the model picker lists.
 const env = process.env;
 const providersFile = env.COPILOT_PROVIDERS_CONFIG?.trim();
-const byok = providersFile ? {
-  ...JSON.parse(readFileSync(providersFile, 'utf8')) as Pick<Copilot.SessionConfig, 'providers' | 'models'>,
-} : env.COPILOT_PROVIDER_BASE_URL ? {
+const catalog = providersFile ? JSON.parse(readFileSync(providersFile, 'utf8')) as Pick<Copilot.SessionConfig, 'providers' | 'models'> : undefined;
+const byok = catalog ? { providers: catalog.providers, models: catalog.models } : env.COPILOT_PROVIDER_BASE_URL ? {
   provider: {
     baseUrl: env.COPILOT_PROVIDER_BASE_URL,
     apiKey: env.COPILOT_PROVIDER_API_KEY,

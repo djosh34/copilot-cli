@@ -68,7 +68,7 @@ export function catalogEnv(d: Scratch, family: Family, url: string): Record<stri
   return { ...env, COPILOT_PROVIDERS_CONFIG: file, COPILOT_MODEL: `fake/${family.model}` };
 }
 
-export const toolNames =(r: Recorded): string[] => r.body.tools.map((t: any) => t.name ?? t.function?.name);
+export const toolNames = (r: Recorded): string[] => r.body.tools.map((t: any) => t.name ?? t.function?.name);
 export const systemText = (r: Recorded): unknown[] => [
   ...(r.body.system?.length ? [r.body.system] : []),
   ...(r.body.instructions ? [r.body.instructions] : []),

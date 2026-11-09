@@ -127,7 +127,7 @@ for (const base of families) {
       assert.equal(loaded.configOptions![0].currentValue, second);
       const replay = c2.updates.filter(u => u.sessionId === s).map(u => u.update);
       const said = (kind: string) => replay.filter(u => u.sessionUpdate === kind).map(u => (u as any).content.text);
-      assert.deepEqual(said('user_message_chunk').slice(0, 2), ['Read hello.txt with a subagent', 'Use the tools']);
+      assert.deepEqual(said('user_message_chunk'), ['Read hello.txt with a subagent', 'Use the tools', 'What is this?', 'Read hello.txt with a subagent', 'Go on']);
       assert.ok(said('agent_message_chunk').includes('parent-done'), 'replayed agent text');
       assert.ok(replay.some(u => u.sessionUpdate === 'tool_call' && u.kind === 'execute'), 'replayed tool calls');
       // A loaded session has no subagents: Copilot 1.0.105 drops gp's prompt settings when the SDK reopens a session.

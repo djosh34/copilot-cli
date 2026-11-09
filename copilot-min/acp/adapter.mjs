@@ -9661,9 +9661,8 @@ var copilot = new sdk.CopilotClient({
 await copilot.start();
 var env = process.env;
 var providersFile = env.COPILOT_PROVIDERS_CONFIG?.trim();
-var byok = providersFile ? {
-  ...JSON.parse(readFileSync(providersFile, "utf8"))
-} : env.COPILOT_PROVIDER_BASE_URL ? {
+var catalog = providersFile ? JSON.parse(readFileSync(providersFile, "utf8")) : void 0;
+var byok = catalog ? { providers: catalog.providers, models: catalog.models } : env.COPILOT_PROVIDER_BASE_URL ? {
   provider: {
     baseUrl: env.COPILOT_PROVIDER_BASE_URL,
     apiKey: env.COPILOT_PROVIDER_API_KEY,
