@@ -1,0 +1,35 @@
+{
+  "experimental": true,
+  "memory": false,
+  "ide": {
+    "autoConnect": false
+  },
+  "subagents": {
+    "disabledSubagents": [
+      "explore",
+      "task",
+      "general-purpose",
+      "code-review",
+      "research",
+      "security-review",
+      "rubber-duck"
+    ]
+  },
+  "defaultPermissionMode": "allow-all",
+  "autoUpdate": false,
+  "askUser": false,
+  "disabledMcpServers": [
+    "github-mcp-server",
+    "githubiq"
+  ],
+  "remoteExport": false,
+  "disableAllHooks": false,
+  "hooks": {
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "in=$(cat); case $in in *'\"parentAgentId\"'*) exit 0;; esac; sid=${in#*'\"sessionId\":\"'}; ts=${in#*'\"timestamp\":'}; m=\"${COPILOT_HOME:-$HOME/.copilot}/session-state/${sid%%'\"'*}/minprompt.$PPID\"; case \" $(ps -o args= -p $PPID) \" in *' -p '*|*' --prompt'*) [ -e \"$m\" ] && exit 0;; esac; [ \"${ts%%[,\\}]*}\" -ge \"$(cat \"$m\" 2>/dev/null)\" ] 2>/dev/null || echo '{\"decision\":\"block\",\"reason\":\"Minimal prompt not loaded yet. Send your prompt again.\"}'"
+      }
+    ]
+  }
+}
