@@ -9785,13 +9785,16 @@ function sessionConfig(cwd) {
   };
 }
 var compact = { name: "compact", description: "Summarize the conversation to free context. Costs a model call." };
+function replay(state, history) {
+  for (const event of history) {
+    const update = event.type === "user.message" ? event.agentId ? void 0 : { sessionUpdate: "user_message_chunk", content: { type: "text", text: event.data.content } } : toUpdate(event, state);
+    if (update) notify(state.session.sessionId, update);
+  }
+}
 async function open2(session, cwd, history = []) {
   const state = { session, cwd, streamed: /* @__PURE__ */ new Set(), output: /* @__PURE__ */ new Map(), diffs: /* @__PURE__ */ new Map(), models: [] };
   sessions.set(session.sessionId, state);
-  for (const event of history) {
-    const update = event.type === "user.message" ? event.agentId ? void 0 : { sessionUpdate: "user_message_chunk", content: { type: "text", text: event.data.content } } : toUpdate(event, state);
-    if (update) notify(session.sessionId, update);
-  }
+  replay(state, history);
   session.on((event) => {
     const update = toUpdate(event, state);
     if (update) notify(session.sessionId, update);
@@ -9839,18 +9842,18 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
 })).onRequest("session/load", logged(async ({ params }) => {
   const config2 = sessionConfig(params.cwd);
   await checkLogin();
-  const open_ = sessions.get(params.sessionId);
-  if (open_) {
-    sessions.delete(params.sessionId);
-    await open_.session.disconnect();
+  const already = sessions.get(params.sessionId);
+  if (already) {
+    replay(already, await already.session.getEvents());
+    return { configOptions: configOptions(already) };
   }
   const session = await copilot.resumeSession(params.sessionId, {
     ...config2,
     customAgents: [],
     availableTools: minimal.availableTools.filter((tool) => tool !== "task")
   });
-  const { configOptions: configOptions2 } = await open2(session, params.cwd, await session.getEvents());
-  return { configOptions: configOptions2 };
+  const opened = await open2(session, params.cwd, await session.getEvents());
+  return { configOptions: opened.configOptions };
 })).onRequest("session/list", logged(async ({ params }) => {
   const list = await copilot.listSessions(params.cwd ? { workingDirectory: params.cwd } : void 0);
   const sessions2 = list.flatMap((s) => s.context?.workingDirectory ? [{

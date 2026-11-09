@@ -194,17 +194,22 @@ function sessionConfig(cwd: string) {
 
 const compact: acp.AvailableCommand = { name: 'compact', description: 'Summarize the conversation to free context. Costs a model call.' };
 
+// Sends a session's history to the client, for session/load.
+function replay(state: State, history: Copilot.SessionEvent[]) {
+  for (const event of history) {
+    const update = event.type === 'user.message'
+      ? event.agentId ? undefined : { sessionUpdate: 'user_message_chunk' as const, content: { type: 'text' as const, text: event.data.content } }
+      : toUpdate(event, state);
+    if (update) notify(state.session.sessionId, update);
+  }
+}
+
 // Starts the ACP side of a Copilot session: replays its history (for session/load), forwards its events, and
 // offers the model picker and /compact.
 async function open(session: Copilot.CopilotSession, cwd: string, history: Copilot.SessionEvent[] = []) {
   const state: State = { session, cwd, streamed: new Set(), output: new Map(), diffs: new Map(), models: [] };
   sessions.set(session.sessionId, state);
-  for (const event of history) {
-    const update = event.type === 'user.message'
-      ? event.agentId ? undefined : { sessionUpdate: 'user_message_chunk' as const, content: { type: 'text' as const, text: event.data.content } }
-      : toUpdate(event, state);
-    if (update) notify(session.sessionId, update);
-  }
+  replay(state, history);
   session.on(event => {
     const update = toUpdate(event, state);
     if (update) notify(session.sessionId, update);
@@ -263,10 +268,11 @@ const app = acp.agent({ name: 'copilot-min' })
   .onRequest('session/load', logged(async ({ params }) => {
     const config = sessionConfig(params.cwd);
     await checkLogin();
-    const open_ = sessions.get(params.sessionId);
-    if (open_) {
-      sessions.delete(params.sessionId);
-      await open_.session.disconnect();
+    // A session already open in this process (it may not be on disk yet) only replays its history.
+    const already = sessions.get(params.sessionId);
+    if (already) {
+      replay(already, await already.session.getEvents());
+      return { configOptions: configOptions(already) };
     }
     // A loaded session keeps the model it was switched to. It gets no subagents: when the SDK reopens a session,
     // Copilot 1.0.105 drops the custom agent's promptParts, so gp would get Copilot's full subagent prompt (#102).
@@ -275,8 +281,8 @@ const app = acp.agent({ name: 'copilot-min' })
       customAgents: [],
       availableTools: minimal.availableTools.filter(tool => tool !== 'task'),
     });
-    const { configOptions } = await open(session, params.cwd, await session.getEvents());
-    return { configOptions };
+    const opened = await open(session, params.cwd, await session.getEvents());
+    return { configOptions: opened.configOptions };
   }))
   .onRequest('session/list', logged(async ({ params }) => {
     const list = await copilot.listSessions(params.cwd ? { workingDirectory: params.cwd } : undefined);
