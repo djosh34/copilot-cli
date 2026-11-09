@@ -11,12 +11,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.9.28
       - name: Install tmux if missing
         run: command -v tmux || (sudo apt-get update && sudo apt-get install -y tmux)
       - run: npm ci
       - run: npm run build
-      - name: Built extension matches src
-        run: git diff --exit-code copilot-min/
+      - name: Built files match src
+        run: test -z "$(git status --porcelain copilot-min/)" || { git status --porcelain copilot-min/; exit 1; }
       - run: shellcheck install.sh bin/copilot-min
-      - name: End-to-end test against a fake model (no AI, no secrets)
+      - name: End-to-end tests against a fake model (no AI, no secrets)
         run: npm test
+      # Tests skipped by name, with the reason, are in test/tck.ts.
+      - name: ACP test kit against copilot-min --acp (fake model)
+        run: npm run tck
