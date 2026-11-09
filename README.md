@@ -39,6 +39,8 @@ So `copilot -p` needs `--yolo` (or use `copilot-min -p`); without it, `bash` and
 
 Copilot still asks once per folder whether you trust it; pick "remember" to stop that.
 
+`copilot-min --acp` starts an ACP agent for JetBrains Air and other ACP clients instead: each session gets the same minimal setup as the terminal, on your own `~/.copilot`, and the client's MCP servers are ignored. It needs Node.js 20.19 or newer on your `PATH`. Plain `copilot --acp` can't load the extension, so the guard refuses its prompts and points to `copilot-min --acp`. The adapter is written in [`src/acp.mts`](src/acp.mts).
+
 ## What is merged into `~/.copilot`
 
 ```
@@ -47,7 +49,7 @@ Copilot still asks once per folder whether you trust it; pick "remember" to stop
 └── extensions/minprompt/extension.mjs   empty system prompt, the gp subagent, tool allowlist
 ```
 
-`settings.json` ([`copilot-min/settings.json`](copilot-min/settings.json)). On a conflict ours wins, except for two lists: `subagents.disabledSubagents` keeps your entries and adds ours (and removes `gp`, our subagent), and `hooks.userPromptSubmitted` puts our hook first and keeps yours after it.
+`settings.json` ([`copilot-min/settings.json`](copilot-min/settings.json)). On a conflict ours wins, except for two lists: `subagents.disabledSubagents` keeps your entries and adds ours (and removes `gp`, our subagent), and `hooks.userPromptSubmitted` puts our hook first and keeps yours after it. It drops an earlier version of our hook (any hook that mentions `minprompt.`), so updating doesn't leave two guards.
 
 | Key | What it does |
 |---|---|
@@ -61,9 +63,9 @@ Copilot still asks once per folder whether you trust it; pick "remember" to stop
 | `disabledMcpServers: ["github-mcp-server", "githubiq"]` | Stops the built-in GitHub MCP servers. |
 | `remoteExport: false` | No session sync to your GitHub account. |
 | `disableAllHooks: false` | Keeps hooks on, so the guard below runs. |
-| `hooks.userPromptSubmitted` | The guard: refuses a prompt sent before the extension has loaded (see [When it breaks](#when-it-breaks)). |
+| `hooks.userPromptSubmitted` | The guard: refuses a prompt sent before the extension has loaded (see [When it breaks](#when-it-breaks)), and every prompt of plain `copilot --acp`. It lets `copilot-min --acp` through. |
 
-The extension ([`src/extension.mts`](src/extension.mts)) joins each session and sets:
+The extension ([`src/extension.mts`](src/extension.mts)) joins each session and sets ([`src/config.mts`](src/config.mts), shared with `copilot-min --acp`):
 
 | Field | What it does |
 |---|---|
@@ -116,12 +118,13 @@ The whole session cost 0.14 AI credits. Full captures, every tool schema and the
 
 ## Develop
 
-The extension is written in `src/extension.mts` and built into `copilot-min/extensions/minprompt/extension.mjs`, which is committed so installing needs no build.
+The extension is written in `src/extension.mts` and built into `copilot-min/extensions/minprompt/extension.mjs`. The ACP adapter is written in `src/acp.mts` and built into `copilot-min/acp/adapter.mjs`, with `@agentclientprotocol/sdk` and `zod` bundled in. Both are committed so installing needs no build.
 
 ```sh
 npm ci
-npm run build   # tsc against @github/copilot-sdk 1.0.28 (built for Copilot CLI 1.0.105)
-npm test        # typecheck, then the end-to-end test against a fake model
+npm run build   # tsc typecheck against @github/copilot-sdk 1.0.28 (built for Copilot CLI 1.0.105), then esbuild
+npm test        # typecheck, then the end-to-end tests against a fake model
+npm run tck -- -k 'not test_agent_connects_to_the_stdio_mcp_server'   # the ACP test kit, as CI runs it (needs uv)
 shellcheck install.sh bin/copilot-min
 ```
 
@@ -131,5 +134,7 @@ The test starts a fake model server (`test/fake-llm.ts`) and runs Copilot CLI 1.
 - `copilot -p --yolo`, `copilot-min -p` and `copilot -p` without `--yolo`, for a GPT and a Claude model: no system text in main requests, only `<subagent_usage>` in GPT subagent requests, the tool lists above, `task` offers only `gp`, and both subagents read a file and their results reach the main agent.
 - Interactive `copilot` in tmux, both models: a prompt, `/clear`, a prompt, `/new`, a prompt, each with the same checks.
 - The guard: with the ready marker moved aside, a prompt is refused and nothing reaches the model; with it back, the prompt goes out minimal.
+- `copilot-min --acp` with the official ACP client, both models: every raw message matches the ACP v1 JSON schema; two sessions in one process, each with a `gp` subagent; text, embedded text resources and resource links; streamed text; tool updates; cancel; the client's MCP server gets nothing; AGENTS.md isn't sent; large output goes to a file; skills and your own agents show up; `github-mcp-server` is disabled; no permission requests to the client. All with the same checks on every model request.
+- Plain `copilot --acp` is refused with no model call, and `install.sh` replaces the guard of an earlier install.
 
 It can't reach the WebSocket path the real Copilot route uses.

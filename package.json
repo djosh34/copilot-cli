@@ -2,13 +2,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "test": "tsc -p tsconfig.test.json && node --test 'test/*.test.ts'"
+    "build": "tsc && npm run build:extension && npm run build:acp",
+    "build:extension": "esbuild src/extension.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --external:@github/copilot-sdk --banner:js='// Built from src/extension.mts by npm run build.' --outfile=copilot-min/extensions/minprompt/extension.mjs",
+    "build:acp": "esbuild src/acp.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --banner:js='// Built from src/acp.mts by npm run build. Bundles @agentclientprotocol/sdk and zod.' --outfile=copilot-min/acp/adapter.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test 'test/*.test.ts'",
+    "tck": "node test/tck.ts"
   },
   "devDependencies": {
+    "@agentclientprotocol/sdk": "2.4.0",
     "@github/copilot": "1.0.105",
     "@github/copilot-sdk": "1.0.28",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2"
+    "ajv": "8.17.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
   }
 }

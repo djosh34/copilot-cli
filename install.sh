@@ -26,7 +26,8 @@ show_diff() {
 mkdir -p "$dest"
 
 # settings.json: deep merge, ours wins, except two lists. disabledSubagents keeps your entries, adds ours and drops
-# "gp" (our subagent). userPromptSubmitted puts our guard hook first, then yours.
+# "gp" (our subagent). userPromptSubmitted puts our guard hook first, then yours, and drops an earlier version of
+# our guard (any hook that mentions minprompt.).
 settings=$dest/settings.json
 if [ ! -e "$settings" ]; then
   cp "$src/settings.json" "$settings"
@@ -34,7 +35,8 @@ if [ ! -e "$settings" ]; then
 else
   merged=$(jq -S -s '.[0] as $u | .[1] as $o | ($u * $o)
     | .subagents.disabledSubagents = ((($u.subagents.disabledSubagents // []) + $o.subagents.disabledSubagents) | unique - ["gp"])
-    | .hooks.userPromptSubmitted = ($o.hooks.userPromptSubmitted + (($u.hooks.userPromptSubmitted // []) - $o.hooks.userPromptSubmitted))' \
+    | .hooks.userPromptSubmitted = ($o.hooks.userPromptSubmitted
+      + (($u.hooks.userPromptSubmitted // []) | map(select(.bash // "" | contains("minprompt.") | not))))' \
     "$settings" "$src/settings.json")
   if [ "$merged" = "$(jq -S . "$settings")" ]; then
     echo "$settings already has the minimal setup."

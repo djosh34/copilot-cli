@@ -4,8 +4,9 @@
     "module": "nodenext",
     "strict": true,
     "skipLibCheck": true,
-    "rootDir": "src",
-    "outDir": "copilot-min/extensions/minprompt"
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
   "include": ["src"]
 }

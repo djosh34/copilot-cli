@@ -28,7 +28,7 @@
     "userPromptSubmitted": [
       {
         "type": "command",
-        "bash": "in=$(cat); case $in in *'\"parentAgentId\"'*) exit 0;; esac; sid=${in#*'\"sessionId\":\"'}; ts=${in#*'\"timestamp\":'}; m=\"${COPILOT_HOME:-$HOME/.copilot}/session-state/${sid%%'\"'*}/minprompt.$PPID\"; case \" $(ps -o args= -p $PPID) \" in *' -p '*|*' --prompt'*) [ -e \"$m\" ] && exit 0;; esac; [ \"${ts%%[,\\}]*}\" -ge \"$(cat \"$m\" 2>/dev/null)\" ] 2>/dev/null || echo '{\"decision\":\"block\",\"reason\":\"Minimal prompt not loaded yet. Send your prompt again.\"}'"
+        "bash": "in=$(cat); [ \"$COPILOT_MIN_ADAPTER\" = 1 ] && exit 0; case $in in *'\"parentAgentId\"'*) exit 0;; esac; sid=${in#*'\"sessionId\":\"'}; ts=${in#*'\"timestamp\":'}; m=\"${COPILOT_HOME:-$HOME/.copilot}/session-state/${sid%%'\"'*}/minprompt.$PPID\"; case \" $(ps -o args= -p $PPID) \" in *' --acp '*) echo '{\"decision\":\"block\",\"reason\":\"Plain copilot --acp does not load the minimal setup. Use copilot-min --acp instead.\"}'; exit 0;; *' -p '*|*' --prompt'*) [ -e \"$m\" ] && exit 0;; esac; [ \"${ts%%[,\\}]*}\" -ge \"$(cat \"$m\" 2>/dev/null)\" ] 2>/dev/null || echo '{\"decision\":\"block\",\"reason\":\"Minimal prompt not loaded yet. Send your prompt again.\"}'"
       }
     ]
   }

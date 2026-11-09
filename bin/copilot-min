@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 # Starts the minimal Copilot in the current directory, after ./install.sh. These flags have no setting:
 # no client telemetry, stay on the installed Copilot version, and allow all tools, also in -p.
+# copilot-min --acp [copilot options] runs the ACP adapter instead (for JetBrains Air), with Node.js.
 set -euo pipefail
-exec copilot --disable-client-telemetry --no-auto-update --yolo "$@"
+if [ "${1-}" != --acp ]; then
+  exec copilot --disable-client-telemetry --no-auto-update --yolo "$@"
+fi
+shift
+if ! command -v node >/dev/null; then
+  echo "copilot-min --acp needs Node.js 20.19 or newer (node on your PATH). Install it and try again." >&2
+  exit 1
+fi
+if ! copilot=$(command -v copilot); then
+  echo "copilot-min --acp needs copilot on your PATH. Install it and try again." >&2
+  exit 1
+fi
+repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+exec node "$repo/copilot-min/acp/adapter.mjs" "$copilot" "$@"

@@ -1,24 +1,11 @@
-// Empties the main system prompt, defines the gp subagent with Copilot's prompt parts off, and sets the
-// tool allowlist, no custom instructions and the 8 KB output limit. No request handler.
+// Joins each terminal session and applies the minimal config from config.mts. No request handler.
 // Uses internal Copilot SDK calls; tested on Copilot CLI 1.0.105 only.
 import { CopilotClient, type CopilotClientOptions } from '@github/copilot-sdk';
 import { rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { minimal } from './config.mts';
 
-const off = {
-  includeAISafety: false, includeToolInstructions: false, includeParallelToolCalling: false,
-  includeEnvironmentContext: false, includeNoTmpFileInstructions: false, includeSoftFileOutputInstructions: false,
-  includeCustomAgentInstructions: false, includeCustomInstructions: false, includeDynamicContextBoard: false,
-  includeSessionSearchContext: false, includeConsolidationPrompt: false,
-};
-const config = {
-  systemMessage: { mode: 'replace', content: '' },
-  customAgents: [{ name: 'gp', description: 'General-purpose agent.', prompt: '', promptParts: off }],
-  availableTools: ['task', 'bash', 'view', 'apply_patch', 'create', 'edit', 'web_fetch', 'skill'],
-  skipCustomInstructions: true,
-  largeOutput: { maxSizeBytes: 8192 },
-  suppressResumeEvent: true,
-};
+const config = { ...minimal, suppressResumeEvent: true };
 
 // What the SDK's joinSession() does, kept so the extension can join again. Internal, missing from the SDK's types.
 type Send = (method: string, params?: any, ...rest: unknown[]) => Promise<unknown>;
