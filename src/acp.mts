@@ -221,7 +221,7 @@ async function open(session: Copilot.CopilotSession, cwd: string, history: Copil
   sessions.set(session.sessionId, state);
   replay(state, history);
   session.on(event => {
-    const update = toUpdate(event, replayState);
+    const update = toUpdate(event, state);
     if (update) notify(session.sessionId, update);
     // Shows in the client's agent log which MCP servers (your own and Copilot's built-in) this session starts.
     if (event.type === 'session.mcp_servers_loaded') {

@@ -9790,7 +9790,7 @@ function replay(state, history) {
   const send = (update) => notify(state.session.sessionId, update);
   for (const event of history) {
     if (event.type !== "user.message") {
-      const update = toUpdate(event, state);
+      const update = toUpdate(event, replayState);
       if (update) send(update);
       continue;
     }
