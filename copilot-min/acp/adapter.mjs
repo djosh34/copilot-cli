@@ -9729,7 +9729,7 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
   session.on((event) => {
     const update = toUpdate(event, state);
     if (update) connection.client.notify("session/update", { sessionId: session.sessionId, update }).catch((err) => console.error("copilot-min --acp: session/update failed:", err));
-    if (event.type === "session.idle" || event.type === "session.error") state.turn?.done(event);
+    if ((event.type === "session.idle" || event.type === "session.error") && !event.agentId) state.turn?.done(event);
     if (event.type === "session.mcp_servers_loaded") {
       const servers = event.data.servers.map((s) => `${s.name} ${s.status}`).join(", ") || "none";
       console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);

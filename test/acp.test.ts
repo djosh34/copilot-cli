@@ -169,6 +169,14 @@ for (const family of families) {
       assert.match(output, /Saved to/, 'large output saved to a file');
       assert.doesNotMatch(output, /\b2499\b/, 'large output not inline');
 
+      // A failing subagent doesn't end the prompt: the task tool fails, then the main agent answers.
+      llm.script = { parent: oneSubagent(d).parent, subagent: [{ status: 400 }] };
+      const failing = await c.newSession();
+      await turn(c, llm, failing, 'Read hello.txt with a subagent', 'parent-done');
+      const response = c.wire.findLastIndex(w => w.from === 'agent' && w.message.result?.stopReason);
+      const taskEnd = c.wire.findIndex(w => w.message.params?.sessionId === failing && w.message.params.update?.status === 'failed');
+      assert.ok(taskEnd >= 0 && taskEnd < response, 'the failed task tool ends before the prompt does');
+
       // Cancel while the model holds its response.
       llm.script = { parent: [{ text: 'never' }], subagent: [] };
       const held = c.prompt(b, `Wait ${holdMarker}`);
@@ -183,7 +191,7 @@ for (const family of families) {
       assert.ok(starts.length >= 5, 'tool starts');
       for (const s of starts) {
         const id = (s.update as acp.ToolCall).toolCallId;
-        assert.ok(ends.some(e => e.sessionId === s.sessionId && (e.update as acp.ToolCallUpdate).toolCallId === id && (e.update as acp.ToolCallUpdate).status === 'completed'), `end of ${id}`);
+        assert.ok(ends.some(e => e.sessionId === s.sessionId && (e.update as acp.ToolCallUpdate).toolCallId === id && ['completed', 'failed'].includes((e.update as acp.ToolCallUpdate).status!)), `end of ${id}`);
       }
       assert.equal(c.permissionAsks(), 0, 'no session/request_permission');
       assert.equal(mcp.seen(), 0, 'no request to the client MCP server');

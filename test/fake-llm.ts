@@ -1,10 +1,11 @@
 // A fake model provider for Copilot CLI's BYOK mode. It plays a fixed script of tool calls,
 // streams them back as OpenAI Responses or Anthropic Messages events, and records every request.
-// A request that contains the hold marker gets no answer until release() (or until the client gives up).
+// A { status } step answers with that HTTP error. A request that contains the hold marker gets no answer until
+// release() (or until the client gives up).
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-export type Step = { tool: string; args: object } | { text: string };
+export type Step = { tool: string; args: object } | { text: string } | { status: number };
 export type Script = { parent: Step[]; subagent: Step[] };
 export type Recorded = { subagent: boolean; body: any };
 
@@ -21,7 +22,7 @@ function toolResults(body: any): number {
 // Text streams in two pieces, as a real model streams it.
 const halves = (text: string) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
 
-function responses(step: Step, n: number): string {
+function responses(step: Exclude<Step, { status: number }>, n: number): string {
   const item = 'tool' in step
     ? { id: `fc_${n}`, type: 'function_call', status: 'completed', call_id: `call_${n}`, name: step.tool, arguments: JSON.stringify(step.args) }
     : { id: `msg_${n}`, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: step.text, annotations: [] }] };
@@ -36,7 +37,7 @@ function responses(step: Step, n: number): string {
   ].map((e, i) => ({ ...e, sequence_number: i })));
 }
 
-function messages(step: Step, n: number): string {
+function messages(step: Exclude<Step, { status: number }>, n: number): string {
   const tool = 'tool' in step;
   const block = tool ? { type: 'tool_use', id: `toolu_${n}`, name: step.tool, input: {} } : { type: 'text', text: '' };
   const deltas = tool ? [{ type: 'input_json_delta', partial_json: JSON.stringify(step.args) }] : halves(step.text).map(text => ({ type: 'text_delta', text }));
@@ -73,8 +74,9 @@ export async function startFakeLlm(initial: Script) {
     requests.push({ subagent, body });
     const steps = subagent ? llm.script.subagent : llm.script.parent;
     const step = steps[toolResults(body)] ?? steps[steps.length - 1];
-    const events = req.url?.endsWith('/responses') ? responses(step, ++n) : messages(step, ++n);
-    const answer = () => res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events);
+    const answer = 'status' in step
+      ? () => res.writeHead(step.status, { 'content-type': 'application/json' }).end('{"error":{"type":"invalid_request_error","message":"fake failure"}}')
+      : () => res.writeHead(200, { 'content-type': 'text/event-stream' }).end(req.url?.endsWith('/responses') ? responses(step, ++n) : messages(step, ++n));
     if (JSON.stringify(body).includes(holdMarker)) held.push(answer);
     else answer();
   });

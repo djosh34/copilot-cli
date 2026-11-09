@@ -128,7 +128,8 @@ const app = acp.agent({ name: 'copilot-min' })
       const update = toUpdate(event, state);
       if (update) connection.client.notify('session/update', { sessionId: session.sessionId, update })
         .catch(err => console.error('copilot-min --acp: session/update failed:', err));
-      if (event.type === 'session.idle' || event.type === 'session.error') state.turn?.done(event);
+      // Only the main agent's idle or error ends the turn; a subagent's error is its task tool's result.
+      if ((event.type === 'session.idle' || event.type === 'session.error') && !event.agentId) state.turn?.done(event);
       // Shows in the client's agent log which MCP servers (your own and Copilot's built-in) this session starts.
       if (event.type === 'session.mcp_servers_loaded') {
         const servers = event.data.servers.map(s => `${s.name} ${s.status}`).join(', ') || 'none';
