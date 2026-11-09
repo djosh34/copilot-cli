@@ -9803,8 +9803,9 @@ async function open2(session, cwd, history = []) {
       console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);
     }
   });
-  state.model = (await session.rpc.model.getCurrent()).modelId;
-  state.models = await modelOptions(session, state.model);
+  const current = (await session.rpc.model.getCurrent()).modelId;
+  state.models = await modelOptions(session, current);
+  state.model = current ?? state.models[0]?.value;
   setImmediate(() => notify(session.sessionId, { sessionUpdate: "available_commands_update", availableCommands: [compact] }));
   return { sessionId: session.sessionId, configOptions: configOptions(state) };
 }

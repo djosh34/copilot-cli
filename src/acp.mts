@@ -219,8 +219,10 @@ async function open(session: Copilot.CopilotSession, cwd: string, history: Copil
       console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);
     }
   });
-  state.model = (await session.rpc.model.getCurrent()).modelId;
-  state.models = await modelOptions(session, state.model);
+  // With a login and no model picked yet, Copilot reports none; the picker then shows the first model listed.
+  const current = (await session.rpc.model.getCurrent()).modelId;
+  state.models = await modelOptions(session, current);
+  state.model = current ?? state.models[0]?.value;
   // After the response, so the client knows the session.
   setImmediate(() => notify(session.sessionId, { sessionUpdate: 'available_commands_update', availableCommands: [compact] }));
   return { sessionId: session.sessionId, configOptions: configOptions(state) };
