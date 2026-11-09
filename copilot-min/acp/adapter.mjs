@@ -9729,7 +9729,6 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
   session.on((event) => {
     const update = toUpdate(event, state);
     if (update) connection.client.notify("session/update", { sessionId: session.sessionId, update }).catch((err) => console.error("copilot-min --acp: session/update failed:", err));
-    if ((event.type === "session.idle" || event.type === "session.error") && !event.agentId) state.turn?.done(event);
     if (event.type === "session.mcp_servers_loaded") {
       const servers = event.data.servers.map((s) => `${s.name} ${s.status}`).join(", ") || "none";
       console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);
@@ -9740,17 +9739,15 @@ var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
   const state = sessionState(params.sessionId);
   if (state.turn) throw RequestError.invalidRequest({ sessionId: params.sessionId }, "This session is already running a prompt");
   const prompt = params.prompt.map(promptText).join("\n");
-  const turn = { cancelled: false, done: () => {
-  } };
-  const end = new Promise((resolve) => turn.done = resolve);
+  const turn = { cancelled: false };
   state.turn = turn;
   state.streamed.clear();
   try {
-    await state.session.send({ prompt });
-    const event = await end;
+    await state.session.sendAndWait({ prompt }, 2 ** 31 - 1);
+    return { stopReason: turn.cancelled ? "cancelled" : "end_turn" };
+  } catch (err) {
     if (turn.cancelled) return { stopReason: "cancelled" };
-    if (event.type === "session.error") throw new Error(`Copilot: ${event.data.message}`);
-    return { stopReason: "end_turn" };
+    throw err;
   } finally {
     state.turn = void 0;
   }

@@ -5,13 +5,14 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { checkCalls, checkMinimal, copilotEnv, copilotHome, families, install, killGroup, ours, root, scratch, waitFor, type Family, type Scratch } from './common.ts';
 import { holdMarker, startFakeLlm, type Script } from './fake-llm.ts';
 
@@ -74,6 +75,7 @@ function connect(command: string, args: string[], d: Scratch, env: Record<string
   const agent = connection.agent;
   return {
     agent, wire, updates,
+    pid: child.pid,
     permissionAsks: () => permissionAsks,
     stderr: () => stderr,
     text: (sessionId: string) => updates.filter(u => u.sessionId === sessionId && u.update.sessionUpdate === 'agent_message_chunk')
@@ -203,6 +205,15 @@ for (const family of families) {
       llm.script = { parent: [{ text: 'own-ok' }], subagent: [] };
       checkMinimal(await turn(c, llm, await c.newSession(), 'Hi', 'own-ok'), family, ['gp', 'own']);
 
+      // When Copilot goes away during a turn, the prompt fails instead of hanging.
+      const lost = c.prompt(await c.newSession(), `Wait ${holdMarker}`);
+      await waitFor('the held model request', () => llm.held() > 0);
+      execFileSync('pkill', ['-KILL', '-g', String(c.pid), '-f', '--', '--headless']);
+      await Promise.race([
+        assert.rejects(lost, 'the prompt fails'),
+        sleep(30_000).then(() => assert.fail('the prompt is still pending 30 s after Copilot died')),
+      ]);
+
       validateWire(c.wire);
     } finally {
       await c?.close();
@@ -226,7 +237,7 @@ test('plain copilot --acp is refused with a pointer to copilot-min --acp', async
     const s = await c.newSession();
     await c.prompt(s, 'Hi');
     assert.match(c.text(s).join(''), /Use copilot-min --acp instead/);
-    assert.equal(llm.requests.filter(r => r.body.tools).length, 0, 'no model call');
+    assert.equal(llm.requests.length, 0, 'no model call');
     validateWire(c.wire);
   } finally {
     await c?.close();

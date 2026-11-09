@@ -56,8 +56,7 @@ const byok = env.COPILOT_PROVIDER_BASE_URL ? {
   },
 } : {};
 
-type Turn = { cancelled: boolean; done: (event: Copilot.SessionEvent) => void };
-type State = { session: Copilot.CopilotSession; turn?: Turn; streamed: Set<string> };
+type State = { session: Copilot.CopilotSession; turn?: { cancelled: boolean }; streamed: Set<string> };
 const sessions = new Map<string, State>();
 
 // What reaches the model: text as is, embedded text resources as their URI and text, resource links as native
@@ -121,15 +120,13 @@ const app = acp.agent({ name: 'copilot-min' })
       streaming: true,
       workingDirectory: params.cwd,
       onPermissionRequest: sdk.approveAll,
-    } as Copilot.SessionConfig);
+    });
     const state: State = { session, streamed: new Set() };
     sessions.set(session.sessionId, state);
     session.on(event => {
       const update = toUpdate(event, state);
       if (update) connection.client.notify('session/update', { sessionId: session.sessionId, update })
         .catch(err => console.error('copilot-min --acp: session/update failed:', err));
-      // Only the main agent's idle or error ends the turn; a subagent's error is its task tool's result.
-      if ((event.type === 'session.idle' || event.type === 'session.error') && !event.agentId) state.turn?.done(event);
       // Shows in the client's agent log which MCP servers (your own and Copilot's built-in) this session starts.
       if (event.type === 'session.mcp_servers_loaded') {
         const servers = event.data.servers.map(s => `${s.name} ${s.status}`).join(', ') || 'none';
@@ -142,16 +139,17 @@ const app = acp.agent({ name: 'copilot-min' })
     const state = sessionState(params.sessionId);
     if (state.turn) throw acp.RequestError.invalidRequest({ sessionId: params.sessionId }, 'This session is already running a prompt');
     const prompt = params.prompt.map(promptText).join('\n');
-    const turn: Turn = { cancelled: false, done: () => {} };
-    const end = new Promise<Copilot.SessionEvent>(resolve => (turn.done = resolve));
+    const turn = { cancelled: false };
     state.turn = turn;
     state.streamed.clear();
     try {
-      await state.session.send({ prompt });
-      const event = await end;
+      // Resolves once the main agent is idle and its events are delivered; fails on a Copilot error or when
+      // Copilot goes away. A turn has no time limit (the longest timer Node allows, about 24 days).
+      await state.session.sendAndWait({ prompt }, 2 ** 31 - 1);
+      return { stopReason: turn.cancelled ? 'cancelled' as const : 'end_turn' as const };
+    } catch (err) {
       if (turn.cancelled) return { stopReason: 'cancelled' as const };
-      if (event.type === 'session.error') throw new Error(`Copilot: ${event.data.message}`);
-      return { stopReason: 'end_turn' as const };
+      throw err;
     } finally {
       state.turn = undefined;
     }

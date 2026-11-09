@@ -23,6 +23,7 @@ jobs:
       - run: shellcheck install.sh bin/copilot-min
       - name: End-to-end tests against a fake model (no AI, no secrets)
         run: npm test
-      # Tests skipped by name, with the reason, are in test/tck.ts.
+      # Skipped by name: test_agent_connects_to_the_stdio_mcp_server (advisory ACP-SESSION-004). The adapter ignores
+      # the client's MCP servers on purpose, so no tools come from the client (#79).
       - name: ACP test kit against copilot-min --acp (fake model)
-        run: npm run tck
+        run: npm run tck -- -k 'not test_agent_connects_to_the_stdio_mcp_server'

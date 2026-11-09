@@ -124,7 +124,7 @@ The extension is written in `src/extension.mts` and built into `copilot-min/exte
 npm ci
 npm run build   # tsc typecheck against @github/copilot-sdk 1.0.28 (built for Copilot CLI 1.0.105), then esbuild
 npm test        # typecheck, then the end-to-end tests against a fake model
-npm run tck     # the ACP test kit against copilot-min --acp (needs uv; fetches the kit the first time)
+npm run tck -- -k 'not test_agent_connects_to_the_stdio_mcp_server'   # the ACP test kit, as CI runs it (needs uv)
 shellcheck install.sh bin/copilot-min
 ```
 
