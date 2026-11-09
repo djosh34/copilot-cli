@@ -3291,7 +3291,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve) {
+function isRecursive(inst, stack, resolve2) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -3301,7 +3301,7 @@ function isRecursive(inst, stack, resolve) {
   let result = NONE;
   const check = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve);
+      const answer = isRecursive(child, stack, resolve2);
       if (answer > result)
         result = answer;
     }
@@ -3312,7 +3312,7 @@ function isRecursive(inst, stack, resolve) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve2) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -3376,7 +3376,7 @@ function isRecursive(inst, stack, resolve) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve2 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -7802,11 +7802,11 @@ var Connection = class {
     const id = this.nextRequestId++;
     let cancel = () => {
     };
-    const response = new Promise((resolve, reject) => {
+    const response = new Promise((resolve2, reject) => {
       const pendingResponse = {
         resolve: (value) => {
           try {
-            resolve(mapResponse ? mapResponse(value) : value);
+            resolve2(mapResponse ? mapResponse(value) : value);
           } catch (error2) {
             reject(error2);
           }
@@ -7867,8 +7867,8 @@ var Connection = class {
     this.stream = stream;
     this.staticHandlers = handlers;
     this.fallbackHandlers = [...options?.fallbackHandlers ?? []];
-    this.closedPromise = new Promise((resolve) => {
-      this.abortController.signal.addEventListener("abort", () => resolve());
+    this.closedPromise = new Promise((resolve2) => {
+      this.abortController.signal.addEventListener("abort", () => resolve2());
     });
     void this.receive();
   }
@@ -8933,8 +8933,8 @@ var AsyncQueue = class {
     if (this.failed) {
       return Promise.reject(this.failure);
     }
-    return new Promise((resolve, reject) => {
-      this.waiters.push({ resolve, reject });
+    return new Promise((resolve2, reject) => {
+      this.waiters.push({ resolve: resolve2, reject });
     });
   }
 };
@@ -9610,9 +9610,9 @@ var TerminalHandle = class _TerminalHandle {
 
 // src/acp.mts
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
@@ -9660,7 +9660,11 @@ var copilot = new sdk.CopilotClient({
 });
 await copilot.start();
 var env = process.env;
-var byok = env.COPILOT_PROVIDER_BASE_URL ? {
+var providersFile = env.COPILOT_PROVIDERS_CONFIG?.trim();
+var byok = providersFile ? {
+  model: env.COPILOT_MODEL,
+  ...JSON.parse(readFileSync(providersFile, "utf8"))
+} : env.COPILOT_PROVIDER_BASE_URL ? {
   model: env.COPILOT_MODEL,
   provider: {
     baseUrl: env.COPILOT_PROVIDER_BASE_URL,
@@ -9668,21 +9672,71 @@ var byok = env.COPILOT_PROVIDER_BASE_URL ? {
     type: env.COPILOT_PROVIDER_TYPE,
     wireApi: env.COPILOT_PROVIDER_WIRE_API
   }
-} : {};
+} : void 0;
 var sessions = /* @__PURE__ */ new Map();
+function sessionState(sessionId) {
+  const state = sessions.get(sessionId);
+  if (!state) throw RequestError.sessionNotFound(sessionId);
+  return state;
+}
+function notify(sessionId, update) {
+  connection.client.notify("session/update", { sessionId, update }).catch((err) => console.error("copilot-min --acp: session/update failed:", err));
+}
 function promptText(block) {
   if (block.type === "text") return block.text;
   if (block.type === "resource_link") return `[Resource link: ${block.uri}]`;
   if (block.type === "resource" && "text" in block.resource) return `${block.resource.uri}
 ${block.resource.text}`;
-  throw RequestError.invalidParams({ type: block.type }, "Only text, text resources and resource links are supported");
+  throw RequestError.invalidParams({ type: block.type }, "Only text, images, text resources and resource links are supported");
 }
+var toolKinds = { view: "read", bash: "execute", apply_patch: "edit", create: "edit", edit: "edit", web_fetch: "fetch" };
+function toolLocations(args, cwd) {
+  const paths = typeof args === "string" ? [...args.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map((m) => m[1].trim()) : typeof args?.path === "string" ? [args.path] : [];
+  return paths.map((path) => ({ path: resolve(cwd, path) }));
+}
+var textContent = (text) => [{ type: "content", content: { type: "text", text } }];
 function toUpdate(event, state) {
   switch (event.type) {
     case "tool.execution_start":
-      return { sessionUpdate: "tool_call", toolCallId: event.data.toolCallId, title: event.data.toolName, kind: "other", status: "in_progress", rawInput: event.data.arguments };
-    case "tool.execution_complete":
-      return { sessionUpdate: "tool_call_update", toolCallId: event.data.toolCallId, status: event.data.success ? "completed" : "failed", rawOutput: event.data.result ?? event.data.error };
+      return {
+        sessionUpdate: "tool_call",
+        toolCallId: event.data.toolCallId,
+        title: event.data.toolTitle ?? event.data.toolName,
+        kind: toolKinds[event.data.toolName] ?? "other",
+        status: "in_progress",
+        rawInput: event.data.arguments,
+        locations: toolLocations(event.data.arguments, state.cwd)
+      };
+    // Copilot asks for each file write with the file before and after; approveAll allows it.
+    case "permission.requested": {
+      const request = event.data.permissionRequest;
+      if (request.kind !== "write" || !request.toolCallId || !request.fileEdits?.length) return;
+      const diffs = state.diffs.get(request.toolCallId) ?? [];
+      for (const { before, after } of request.fileEdits) {
+        diffs.push({ type: "diff", path: resolve(state.cwd, (after ?? before).path), oldText: before?.content ?? null, newText: after?.content ?? "" });
+      }
+      state.diffs.set(request.toolCallId, diffs);
+      return { sessionUpdate: "tool_call_update", toolCallId: request.toolCallId, content: diffs, locations: diffs.map((d) => ({ path: d.path })) };
+    }
+    case "tool.shell_output": {
+      const output = (state.output.get(event.data.toolCallId) ?? "") + event.data.text;
+      state.output.set(event.data.toolCallId, output);
+      return { sessionUpdate: "tool_call_update", toolCallId: event.data.toolCallId, content: textContent(output) };
+    }
+    case "tool.execution_complete": {
+      const { toolCallId, success, result, error: error2 } = event.data;
+      const diffs = state.diffs.get(toolCallId);
+      state.diffs.delete(toolCallId);
+      state.output.delete(toolCallId);
+      const text = result?.content ?? error2?.message;
+      return {
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        status: success ? "completed" : "failed",
+        rawOutput: result ?? error2,
+        ...diffs ? { content: diffs } : text ? { content: textContent(text) } : {}
+      };
+    }
     // Only the main agent's text; a subagent's text reaches the client as its task tool's output.
     case "assistant.message_delta":
       if (event.agentId || !event.data.deltaContent) return;
@@ -9691,12 +9745,72 @@ function toUpdate(event, state) {
     case "assistant.message":
       if (event.agentId || !event.data.content || state.streamed.has(event.data.messageId)) return;
       return { sessionUpdate: "agent_message_chunk", content: { type: "text", text: event.data.content } };
+    case "session.usage_info":
+      return { sessionUpdate: "usage_update", used: event.data.currentTokens, size: event.data.tokenLimit };
   }
 }
-function sessionState(sessionId) {
-  const state = sessions.get(sessionId);
-  if (!state) throw RequestError.sessionNotFound(sessionId);
-  return state;
+async function modelOptions(session, current) {
+  const models = byok ? (await session.rpc.model.list()).list.map((m) => m) : await copilot.listModels();
+  const options = models.map((m) => ({ value: m.id, name: m.name ?? m.id }));
+  if (current && !options.some((o) => o.value === current)) options.unshift({ value: current, name: current });
+  return options;
+}
+var configOptions = (state) => state.model ? [{
+  type: "select",
+  id: "model",
+  name: "Model",
+  category: "model",
+  currentValue: state.model,
+  options: state.models
+}] : [];
+var authMethods = [{
+  id: "copilot-login",
+  name: "Log in with Copilot CLI",
+  description: "Run `copilot login` in the terminal",
+  _meta: { "terminal-auth": { command: cli, args: ["login"], label: "Copilot Login" } }
+}];
+async function checkLogin() {
+  if (byok) return;
+  const status = await copilot.getAuthStatus();
+  if (!status.isAuthenticated) throw RequestError.authRequired(void 0, `${status.statusMessage ?? "Not logged in"}. Run copilot login.`);
+}
+function sessionConfig(cwd) {
+  if (!isAbsolute(cwd)) throw RequestError.invalidParams({ cwd }, "cwd must be an absolute path");
+  return {
+    ...minimal,
+    ...byok,
+    enableConfigDiscovery: true,
+    requestExtensions: false,
+    streaming: true,
+    workingDirectory: cwd,
+    onPermissionRequest: sdk.approveAll
+  };
+}
+var compact = { name: "compact", description: "Summarize the conversation to free context. Costs a model call." };
+async function open2(session, cwd, history = []) {
+  const state = { session, cwd, streamed: /* @__PURE__ */ new Set(), output: /* @__PURE__ */ new Map(), diffs: /* @__PURE__ */ new Map(), models: [] };
+  sessions.set(session.sessionId, state);
+  for (const event of history) {
+    const update = event.type === "user.message" ? event.agentId ? void 0 : { sessionUpdate: "user_message_chunk", content: { type: "text", text: event.data.content } } : toUpdate(event, state);
+    if (update) notify(session.sessionId, update);
+  }
+  session.on((event) => {
+    const update = toUpdate(event, state);
+    if (update) notify(session.sessionId, update);
+    if (event.type === "session.mcp_servers_loaded") {
+      const servers = event.data.servers.map((s) => `${s.name} ${s.status}`).join(", ") || "none";
+      console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);
+    }
+  });
+  state.model = (await session.rpc.model.getCurrent()).modelId;
+  state.models = await modelOptions(session, state.model);
+  setImmediate(() => notify(session.sessionId, { sessionUpdate: "available_commands_update", availableCommands: [compact] }));
+  return { sessionId: session.sessionId, configOptions: configOptions(state) };
+}
+async function compactSession(state, sessionId) {
+  const result = await state.session.rpc.history.compact({ trigger: "manual" });
+  if (!result.success) throw new Error("Copilot could not compact the conversation");
+  notify(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Compacted: ${result.messagesRemoved} messages, ${result.tokensRemoved} tokens freed.` } });
 }
 function logged(handler) {
   return async (...args) => {
@@ -9710,40 +9824,77 @@ function logged(handler) {
 }
 var app = agent({ name: "copilot-min" }).onRequest("initialize", logged(() => ({
   protocolVersion: PROTOCOL_VERSION,
-  agentCapabilities: { promptCapabilities: { embeddedContext: true } },
+  agentCapabilities: {
+    loadSession: true,
+    promptCapabilities: { image: true, embeddedContext: true },
+    sessionCapabilities: { list: {}, close: {} }
+  },
   agentInfo: { name: "copilot-min", version: version2 },
-  authMethods: []
-}))).onRequest("session/new", logged(async ({ params }) => {
-  if (!isAbsolute(params.cwd)) throw RequestError.invalidParams({ cwd: params.cwd }, "cwd must be an absolute path");
-  const session = await copilot.createSession({
-    ...minimal,
-    ...byok,
-    enableConfigDiscovery: true,
-    requestExtensions: false,
-    streaming: true,
-    workingDirectory: params.cwd,
-    onPermissionRequest: sdk.approveAll
-  });
-  const state = { session, streamed: /* @__PURE__ */ new Set() };
-  sessions.set(session.sessionId, state);
-  session.on((event) => {
-    const update = toUpdate(event, state);
-    if (update) connection.client.notify("session/update", { sessionId: session.sessionId, update }).catch((err) => console.error("copilot-min --acp: session/update failed:", err));
-    if (event.type === "session.mcp_servers_loaded") {
-      const servers = event.data.servers.map((s) => `${s.name} ${s.status}`).join(", ") || "none";
-      console.error(`copilot-min --acp: session ${session.sessionId}: MCP servers: ${servers}`);
-    }
-  });
-  return { sessionId: session.sessionId };
+  authMethods
+}))).onRequest("authenticate", logged(async () => {
+  await checkLogin();
+  return {};
+})).onRequest("session/new", logged(async ({ params }) => {
+  const config2 = sessionConfig(params.cwd);
+  await checkLogin();
+  return open2(await copilot.createSession(config2), params.cwd);
+})).onRequest("session/load", logged(async ({ params }) => {
+  const config2 = sessionConfig(params.cwd);
+  await checkLogin();
+  const open_ = sessions.get(params.sessionId);
+  if (open_) {
+    sessions.delete(params.sessionId);
+    await open_.session.disconnect();
+  }
+  const session = await copilot.resumeSession(params.sessionId, config2);
+  const { configOptions: configOptions2 } = await open2(session, params.cwd, await session.getEvents());
+  return { configOptions: configOptions2 };
+})).onRequest("session/list", logged(async ({ params }) => {
+  const list = await copilot.listSessions(params.cwd ? { workingDirectory: params.cwd } : void 0);
+  const sessions2 = list.flatMap((s) => s.context?.workingDirectory ? [{
+    sessionId: s.sessionId,
+    cwd: s.context.workingDirectory,
+    title: s.summary ?? null,
+    updatedAt: new Date(s.modifiedTime).toISOString()
+  }] : []);
+  return { sessions: sessions2 };
+})).onRequest("session/close", logged(async ({ params }) => {
+  const state = sessionState(params.sessionId);
+  sessions.delete(params.sessionId);
+  if (state.turn) {
+    state.turn.cancelled = true;
+    await state.session.abort();
+  }
+  await state.session.disconnect();
+  return {};
+})).onRequest("session/set_config_option", logged(async ({ params }) => {
+  const state = sessionState(params.sessionId);
+  const value = "value" in params ? params.value : void 0;
+  if (params.configId !== "model" || typeof value !== "string" || !state.models.some((m) => m.value === value)) {
+    throw RequestError.invalidParams({ configId: params.configId, value }, "The only option is model, set to one of its values");
+  }
+  await state.session.setModel(value);
+  state.model = value;
+  return { configOptions: configOptions(state) };
 })).onRequest("session/prompt", logged(async ({ params }) => {
   const state = sessionState(params.sessionId);
   if (state.turn) throw RequestError.invalidRequest({ sessionId: params.sessionId }, "This session is already running a prompt");
-  const prompt = params.prompt.map(promptText).join("\n");
+  const prompt = params.prompt.filter((b) => b.type !== "image").map(promptText).join("\n");
+  const attachments = params.prompt.flatMap((b) => b.type === "image" ? [{
+    type: "blob",
+    data: b.data,
+    mimeType: b.mimeType,
+    displayName: b.uri ? basename(b.uri) : "image"
+  }] : []);
   const turn = { cancelled: false };
   state.turn = turn;
   state.streamed.clear();
   try {
-    await state.session.sendAndWait({ prompt }, 2 ** 31 - 1);
+    if (prompt.trim() === "/compact" && !attachments.length) {
+      await compactSession(state, params.sessionId);
+      return { stopReason: "end_turn" };
+    }
+    await state.session.sendAndWait({ prompt, attachments }, 2 ** 31 - 1);
     return { stopReason: turn.cancelled ? "cancelled" : "end_turn" };
   } catch (err) {
     if (turn.cancelled) return { stopReason: "cancelled" };
