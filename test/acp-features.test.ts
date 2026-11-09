@@ -112,6 +112,12 @@ for (const base of families) {
       assert.match(JSON.stringify(requests[0].body), /the summary/);
       assert.deepEqual(models(llm.requests.slice(from)), [secondModel(family)]);
 
+      // Loading the session while it is open in this process replays it too, up to the last reply.
+      const replayFrom = c.updates.length;
+      await c.agent.request('session/load', { sessionId: s, cwd: d.project, mcpServers: [] });
+      const sameProcess = c.updates.slice(replayFrom).filter(u => u.update.sessionUpdate === 'agent_message_chunk');
+      assert.equal((sameProcess.at(-1)!.update as any).content.text, 'after-compact', 'the last reply replayed');
+
       // List and close.
       const { sessions } = await c.agent.request('session/list', { cwd: d.project });
       assert.deepEqual(sessions.map(x => [x.sessionId, x.cwd]), [[s, d.project]]);
@@ -126,7 +132,9 @@ for (const base of families) {
       const loaded = await c2.agent.request('session/load', { sessionId: s, cwd: d.project, mcpServers: [] });
       assert.equal(loaded.configOptions![0].currentValue, second);
       const replay = c2.updates.filter(u => u.sessionId === s).map(u => u.update);
-      const said = (kind: string) => replay.filter(u => u.sessionUpdate === kind).map(u => (u as any).content.text);
+      const said = (kind: string) => replay.filter(u => u.sessionUpdate === kind && (u as any).content.type === 'text').map(u => (u as any).content.text);
+      const images = replay.filter(u => u.sessionUpdate === 'user_message_chunk' && u.content.type === 'image').map(u => (u as any).content);
+      assert.deepEqual(images, [{ type: 'image', data: pixel, mimeType: 'image/png' }], 'the image replayed');
       assert.deepEqual(said('user_message_chunk'), ['Read hello.txt with a subagent', 'Use the tools', 'What is this?', 'Read hello.txt with a subagent', 'Go on']);
       assert.ok(said('agent_message_chunk').includes('parent-done'), 'replayed agent text');
       assert.ok(replay.some(u => u.sessionUpdate === 'tool_call' && u.kind === 'execute'), 'replayed tool calls');

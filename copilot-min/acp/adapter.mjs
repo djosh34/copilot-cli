@@ -9785,9 +9785,21 @@ function sessionConfig(cwd) {
 }
 var compact = { name: "compact", description: "Summarize the conversation to free context. Costs a model call." };
 function replay(state, history) {
+  const replayState = { ...state, streamed: /* @__PURE__ */ new Set() };
+  const assets = new Map(history.flatMap((e) => e.type === "session.binary_asset" ? [[e.data.assetId, e.data.data]] : []));
+  const send = (update) => notify(state.session.sessionId, update);
   for (const event of history) {
-    const update = event.type === "user.message" ? event.agentId ? void 0 : { sessionUpdate: "user_message_chunk", content: { type: "text", text: event.data.content } } : toUpdate(event, state);
-    if (update) notify(state.session.sessionId, update);
+    if (event.type !== "user.message") {
+      const update = toUpdate(event, state);
+      if (update) send(update);
+      continue;
+    }
+    if (event.agentId) continue;
+    send({ sessionUpdate: "user_message_chunk", content: { type: "text", text: event.data.content } });
+    for (const a of event.data.attachments ?? []) {
+      const data = a.type === "blob" && a.mimeType.startsWith("image/") ? a.data ?? assets.get(a.assetId ?? "") : void 0;
+      if (a.type === "blob" && data) send({ sessionUpdate: "user_message_chunk", content: { type: "image", data, mimeType: a.mimeType } });
+    }
   }
 }
 async function open2(session, cwd, history = []) {

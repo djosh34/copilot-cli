@@ -193,13 +193,24 @@ function sessionConfig(cwd: string) {
 
 const compact: acp.AvailableCommand = { name: 'compact', description: 'Summarize the conversation to free context. Costs a model call.' };
 
-// Sends a session's history to the client, for session/load.
+// Sends a session's history to the client, for session/load: your messages with their images, and the agent's
+// replies and tool calls. With its own set of streamed messages, so replies streamed in this process come too.
 function replay(state: State, history: Copilot.SessionEvent[]) {
+  const replayState = { ...state, streamed: new Set<string>() };
+  const assets = new Map(history.flatMap(e => e.type === 'session.binary_asset' ? [[e.data.assetId, e.data.data] as const] : []));
+  const send = (update: acp.SessionUpdate) => notify(state.session.sessionId, update);
   for (const event of history) {
-    const update = event.type === 'user.message'
-      ? event.agentId ? undefined : { sessionUpdate: 'user_message_chunk' as const, content: { type: 'text' as const, text: event.data.content } }
-      : toUpdate(event, state);
-    if (update) notify(state.session.sessionId, update);
+    if (event.type !== 'user.message') {
+      const update = toUpdate(event, replayState);
+      if (update) send(update);
+      continue;
+    }
+    if (event.agentId) continue;
+    send({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: event.data.content } });
+    for (const a of event.data.attachments ?? []) {
+      const data = a.type === 'blob' && a.mimeType.startsWith('image/') ? a.data ?? assets.get(a.assetId ?? '') : undefined;
+      if (a.type === 'blob' && data) send({ sessionUpdate: 'user_message_chunk', content: { type: 'image', data, mimeType: a.mimeType } });
+    }
   }
 }
 
@@ -210,7 +221,7 @@ async function open(session: Copilot.CopilotSession, cwd: string, history: Copil
   sessions.set(session.sessionId, state);
   replay(state, history);
   session.on(event => {
-    const update = toUpdate(event, state);
+    const update = toUpdate(event, replayState);
     if (update) notify(session.sessionId, update);
     // Shows in the client's agent log which MCP servers (your own and Copilot's built-in) this session starts.
     if (event.type === 'session.mcp_servers_loaded') {
